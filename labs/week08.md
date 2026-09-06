@@ -57,17 +57,43 @@ struct RollingCounter {
     // ...
 };
 ```
-We let `head_`/`tail_` grow monotonically and index with `% buf_.size()`; the
-count of live events is simply `tail_ - head_`.
+We let `head_`/`tail_` grow monotonically and index with
+`& (buf_.size() - 1)` — a mask, valid because we size the ring to a power of two
+(step 3); the count of live events is simply `tail_ - head_`.
 
 ### 3. Constructor — size the ring
 ```cpp
+static constexpr size_t CAP = 1 << 20;
+static_assert((CAP & (CAP - 1)) == 0, "CAP must be a power of two: the ring "
+                                      "indexes with & (CAP-1)");
+
 explicit RollingCounter(uint64_t window_ns) : window_(window_ns) {
-    buf_.resize(1 << 20);          // generous; power of two so % is a mask
+    buf_.resize(CAP);              // CAP is a power of two, so % becomes a mask
 }
 ```
 *Why a big fixed buffer:* the tests push up to a few thousand live events; a
 ring sized once at construction means `add` never allocates on the hot path.
+
+*Why the `static_assert` matters, not just the comment:* `x & (CAP - 1)` is only
+equal to `x % CAP` when `CAP` is a power of two — with, say, `CAP = 1000` the
+mask silently indexes the wrong slot instead of failing loudly. The same rule is
+what makes the deck's `Ring<T,N>` correct: writing `head = (head + 1) % N` costs
+an integer division (20–40 cycles) on a non-power-of-two `N`, and
+`(head - count + i) % N` does that subtraction in **unsigned** arithmetic, so it
+wraps modulo 2^64 — an answer that is only still right if `N` divides 2^64, i.e.
+`N` is a power of two. Assert the shape, then use the mask:
+```cpp
+template<class T, size_t N> struct Ring {
+    static_assert((N & (N - 1)) == 0, "N must be a power of two");
+    std::array<T, N> buf{};
+    size_t head = 0, count = 0;
+    void push(T x) { buf[head] = x; head = (head + 1) & (N - 1);
+                     if (count < N) ++count; }
+    T operator[](size_t i) const { return buf[(head - count + i) & (N - 1)]; }
+};
+```
+One rule — power-of-two capacity, asserted — fixes a performance bug and a
+correctness bug at the same time.
 
 ### 4. `add` — append at the tail
 ```cpp
@@ -81,20 +107,40 @@ volumes stay within the buffer.)
 
 ### 5. `count` — expire from the front, then return the size
 The threshold is `now - window`; anything with `ts <= threshold` is dead. Since
-older events sit at `head_`, we drop them in a `while` loop:
+older events sit at `head_`, we drop them in a `while` loop — but **the guard
+goes around the whole loop, not on the cutoff value**:
 ```cpp
 uint64_t count(uint64_t now_ns) {
-    uint64_t cutoff = now_ns > window_ ? now_ns - window_ : 0;
-    while (head_ < tail_ && buf_[head_ & (buf_.size() - 1)] <= cutoff)
-        ++head_;                       // event expired: drop once, forever
-    return tail_ - head_;              // live events: O(1)
+    if (now_ns > window_) {                 // else the window isn't full yet
+        const uint64_t cutoff = now_ns - window_;   //   -> nothing can expire
+        while (head_ < tail_ && buf_[head_ & (buf_.size() - 1)] <= cutoff)
+            ++head_;                        // event expired: drop once, forever
+    }
+    return tail_ - head_;                   // live events: O(1)
 }
 ```
 Watch the boundary: the contract is "events with `ts > now - window`", i.e.
-strictly greater than `cutoff` survive — so we expire `<= cutoff`. Trace the
-test: `window=1000`, events at ts `0..999`, `count(999)` → `cutoff = -1→0`... in
-the test's second phase `count(1999)` has `cutoff=999`, so ts `0..999` all
-expire and only `1000..1499` (500 events) survive. That matches `rc_mixed`.
+strictly greater than `cutoff` survive — so we expire `<= cutoff`.
+
+**Why the guard is a whole-loop `if` and not `cutoff = now > window ? now - window : 0`.**
+`now_ns` and `window_` are `uint64_t`. When `now_ns <= window_` the mathematical
+cutoff is negative, and there is no `uint64_t` that means "negative" — clamping
+it to `0` looks harmless and is not, because the loop then expires everything
+`<= 0`, which kills a real event sitting at `ts == 0`. Trace the test:
+`window = 1000`, events at ts `0..999`, `count(999)`. The true cutoff is
+`999 - 1000 = -1`, so **every** event survives and the answer is **1000** — but
+the clamped version returns **999**, and `rc_window` fails on exactly that one
+event. Writing the subtraction only when it is meaningful (`now_ns > window_`)
+is the fix; there is no sentinel value to clamp to. This is unsigned underflow
+silently changing the meaning of a comparison, and it is the single most common
+serious bug in low-latency C++. (Signed `int64_t` timestamps would make
+`now - window` genuinely `-1` and the comparison would just work — a legitimate
+alternative, but the contract hands you `uint64_t`, so convert deliberately and
+comment it.)
+
+The test's second phase then checks the ordinary path: `count(1999)` has
+`cutoff = 999`, so ts `0..999` all expire and only `1000..1499` (500 events)
+survive. That matches `rc_mixed`.
 
 ### 6. Run it
 ```bash
@@ -140,6 +186,7 @@ stays stable. Same complexity, correct answer.
 - You can explain "why amortized O(1)" for the counter in one sentence
   (each event added once, removed once).
 - Welford compiles and gives a stable variance.
+- You can say out loud why `cutoff = now > window ? now - window : 0` is wrong.
 - **Then take the midterm.**
 
 ## Links
