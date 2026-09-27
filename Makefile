@@ -18,7 +18,7 @@ spsc:    ; $(CXX) $(CXXFLAGS) tests/spsc_correctness.cpp -o /tmp/spsc && /tmp/sp
 clean:   ; rm -f /tmp/pool /tmp/book /tmp/fix /tmp/u64toa /tmp/rolling /tmp/spsc report.json
 
 # ── Arena: build the C++ client, register your team, run your bot ─────────────
-ARENA ?= https://algoarenafin.duckdns.org
+ARENA ?= https://algoarena-uc.duckdns.org
 client:                    ## build hft/cpp_client with TLS -> hft/cpp_client/build/hft_bot
 	cmake -S hft/cpp_client -B hft/cpp_client/build -DHFT_USE_TLS=ON && cmake --build hft/cpp_client/build
 register:                  ## make register CODE=<class code> NAME="Your Team"  (writes .env)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Register your team on the class arena and write .env for the C++ bot.
 
-    python3 scripts/register.py --arena https://algoarenafin.duckdns.org \
+    python3 scripts/register.py --arena https://algoarena-uc.duckdns.org \
         --code <class code> --name "Your Team Name"
 
 What it does
@@ -53,7 +53,7 @@ def post(url: str, payload: dict) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Register a team on the class arena")
-    ap.add_argument("--arena", required=True, help="dashboard URL, e.g. https://algoarenafin.duckdns.org")
+    ap.add_argument("--arena", required=True, help="dashboard URL, e.g. https://algoarena-uc.duckdns.org")
     ap.add_argument("--code", required=True, help="class registration code (given in class)")
     ap.add_argument("--name", help="team name, 2-40 characters (letters, digits, spaces)")
     ap.add_argument("--traders", type=int, default=1)

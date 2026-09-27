@@ -67,7 +67,7 @@ make run                                      # starts your bot with .env
 ```
 
 `.env` is your team's secret token — it is git-ignored; never paste it in Ed or commit it.
-Dashboard: https://algoarenafin.duckdns.org (MARKET · FLOW · LATENCY).
+Dashboard: https://algoarena-uc.duckdns.org (MARKET · FLOW · LATENCY).
 
 ## Latency benchmark (Project Phase 0 and every phase after)
 

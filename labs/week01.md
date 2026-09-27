@@ -62,7 +62,7 @@ Registration is a one-time step per team. It needs the class registration code
 in the repo root. Never commit `.env`.
 
 ```bash
-python3 scripts/register.py --arena https://algoarenafin.duckdns.org \
+python3 scripts/register.py --arena https://algoarena-uc.duckdns.org \
         --code <class code> --name "Your Team Name"
 # -> Registered team 'Your Team Name'. traders ['your_team_name_trader_1'] ...
 #    .env now holds ARENA_TOKEN, TEAM_ID and EXCHANGE_URL (wss://feed.…)
@@ -72,7 +72,7 @@ Then run the bot with those credentials (`run_bot.sh` loads `.env`):
 
 ```bash
 ./run_bot.sh
-# [arena] connected to wss://feed.algoarenafin.duckdns.org as your_team_name_trader_1 (trader)
+# [arena] connected to wss://feed.algoarena-uc.duckdns.org as your_team_name_trader_1 (trader)
 # [session] FEE_SCHEDULE — taker 30.0 bps, maker rebate 5.0 bps
 # waits for SESSION_OPEN, then trades; prints:  [latency] tick->order = N us
 ```
