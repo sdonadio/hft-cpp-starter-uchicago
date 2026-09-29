@@ -1,8 +1,8 @@
 #pragma once
 #include <cstdint>
-// HW8 — sliding-window event counter. count() is called with a non-decreasing clock.
+// Optional, ungraded (labs/session06.md, D5) — sliding-window event counter. count() is called with a non-decreasing clock.
 //
-// Edge case that costs most people a test (see labs/week08.md step 5): ts_ns and
+// Edge case that costs most people a test (labs/session06.md, D5): ts_ns and
 // now_ns are UNSIGNED. Early on, now_ns <= window_ns and the mathematical cutoff
 // (now - window) is negative — there is no uint64_t that means that, and there is
 // no safe value to clamp it to. Only compute the subtraction when it is

@@ -1,4 +1,4 @@
-// pool_test.cpp — HW4 "high-performance allocator". Contract: pool.hpp defines
+// pool_test.cpp — HW 6, part 1 (Session 6) "high-performance allocator". Contract: pool.hpp defines
 //   struct Pool { Pool(std::size_t obj_size, std::size_t capacity);
 //                 void* alloc(); void free(void*); };
 //

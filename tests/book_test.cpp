@@ -1,4 +1,4 @@
-// book_test.cpp — HW7. Contract: order_book.hpp defines
+// book_test.cpp — HW 6, part 2 (Session 6). Contract: order_book.hpp defines
 //   struct Book { void add(uint64_t id,char side,double px,uint32_t qty);
 //                 void cancel(uint64_t id); double best_bid() const; double best_ask() const; };
 //   struct SymMap { void put(const char* sym,uint64_t id); uint64_t get(const char* sym) const; };

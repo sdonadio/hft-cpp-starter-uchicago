@@ -1,4 +1,4 @@
-# Week 1 Lab — HFT Landscape & Your Arena
+# Session 1 Lab — HFT Landscape & Your Arena
 **Format:** in-class, guided (~45–60 min).  **Repo:** the HFT starter.
 
 ## Goal
@@ -158,5 +158,5 @@ Metrics compute(double bp, double bs, double ap, double as);
   `obi = 0`, `micro = mid`.
 
 ## Links
-Week-1 lecture deck · HW1 (order-book metrics) · Project overview
+Session 1 lecture deck · HW1 (order-book metrics) · Project overview
 (`docs/HFT_CPP_CLIENT.md`)

@@ -1,6 +1,6 @@
 #pragma once
 #include <cstdint>
-// HW11 — a high-performance FIX parser (SOH-delimited tag=value; tags 11/55/54/38/44).
+// HW 8, part 1 — a high-performance FIX parser (SOH-delimited tag=value; tags 11/55/54/38/44).
 struct NewOrder {
     const char* clordid; int clordid_len;   // tag 11
     char symbol[16]; char side;             // tags 55, 54

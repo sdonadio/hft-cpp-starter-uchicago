@@ -1,4 +1,4 @@
-// u64toa_test.cpp — HW12. Contract: u64toa.hpp defines
+// u64toa_test.cpp — HW 8, part 2 (Session 8). Contract: u64toa.hpp defines
 //   int u64toa(uint64_t v, char* out);   // writes decimal digits, returns length
 #include <cstdint>
 #include <cstring>
@@ -34,8 +34,11 @@ int main() {
     }
     {
         char buf[32]; uint64_t x = 123456789012345ULL;
-        double ns = ns_per_op([&] { int n = u64toa(x, buf); doNotOptimize(n); doNotOptimize(buf[0]); }, 3000000);
-        double ns_std = ns_per_op([&] { auto s = std::to_string(x); doNotOptimize(s[0]); }, 3000000);
+        // opaque(x): hide the value from the optimizer so neither side is
+        // constant-folded at compile time (that would print ~0.25 ns/op).
+        auto opaque = [](uint64_t& v) { asm volatile("" : "+r"(v)); };
+        double ns = ns_per_op([&] { opaque(x); int n = u64toa(x, buf); doNotOptimize(n); doNotOptimize(buf[0]); }, 3000000);
+        double ns_std = ns_per_op([&] { opaque(x); auto s = std::to_string(x); doNotOptimize(s[0]); }, 3000000);
         std::cout << "METRIC|u64toa_ns_per_op|" << ns << "\n";
         std::cout << "METRIC|std_to_string_ns_per_op|" << ns_std << "\n";
     }

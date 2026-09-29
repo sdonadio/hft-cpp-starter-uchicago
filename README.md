@@ -1,6 +1,6 @@
 # HFT in C++ — Student Starter Repo
 
-Everything you need for the weekly coding challenges and the semester project.
+Everything you need for the homework coding challenges and the semester project.
 Use this template, make your repo **private**, and add the instructor as a
 collaborator.
 
@@ -9,9 +9,9 @@ collaborator.
 ```
 include/     ← the header STUBS you implement (one per challenge — start here)
 tests/       ← the autograder (do not edit): drivers + bench.hpp + run_ci.py
-starters/    ← provided code you build on (hw13 kernel, hw14 tail)
+starters/    ← provided code you build on (hw02, per-session lab code)
 project/     ← the 8-phase AlgoArena project (README + phase checklist)
-labs/        ← the in-class lab guides (week01 … week15)
+labs/        ← the in-class lab guides (session01 … session09)
 docs/        ← how to get & build the arena C++ client
 .github/     ← CI: runs the autograder on every push
 ```
@@ -29,18 +29,21 @@ Run it locally too:
 make test          # = python3 tests/run_ci.py  (grades whatever you've implemented)
 ```
 
-## Weekly challenges → which file to edit
+## Homework → which file to edit
 
-| HW | File to implement | What it checks |
-|----|-------------------|----------------|
-| 4  | `include/pool.hpp` | O(1) pool alloc/free, placement new, ns/alloc |
-| 7  | `include/order_book.hpp` | flat book best bid/ask + cancel; symbol map; ns/op |
-| 8  | `include/rolling_counter.hpp` | sliding-window count + expiry; ns/op |
-| 10 | `include/spsc_ring.hpp` | SPSC lock-free ring + ThreadSanitizer |
-| 11 | `include/fix_parser.hpp` | single-pass FIX NewOrder parse; ns/op |
-| 12 | `include/u64toa.hpp` | fast uint64→decimal; ns/op vs std |
-| 13 | `starters/hw13/kernel.cpp` | **flags only** — do not edit the file; tune the build |
-| 14 | `starters/hw14/tail.cpp` | profile & fix the latency tail (see the HW) |
+| HW | Session | File to implement | What it checks |
+|----|---------|-------------------|----------------|
+| 2  | 2 | `starters/hw02/hw2.cpp` | pointers/references, copy cost, pointer chasing (graded by hand) |
+| 6  | 6 | `include/pool.hpp` | O(1) pool alloc/free, placement new, ns/alloc |
+| 6  | 6 | `include/order_book.hpp` | flat book best bid/ask + cancel; symbol map; ns/op |
+| 7  | 7 | `include/spsc_ring.hpp` | SPSC lock-free ring + ThreadSanitizer |
+| 8  | 8 | `include/fix_parser.hpp` | single-pass FIX NewOrder parse; ns/op |
+| 8  | 8 | `include/u64toa.hpp` | fast uint64→decimal; ns/op vs std |
+
+HW 1, 3, 4, 5 and 9 have no autograder: you submit source and a write-up on
+Canvas. `starters/hw13` and `starters/hw14` (build flags, latency tail) are lab
+material for Sessions 8–9, not graded homework. `include/rolling_counter.hpp`
+is an optional Session 6 exercise: CI reports its rows, but they are not graded.
 
 Each stub compiles but fails its tests until you implement it — that's your
 red/green signal. The exact interface is fixed by the autograder (and repeated in

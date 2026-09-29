@@ -1,7 +1,7 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
-// Project Phase 4 — POD ring living entirely in a shared-memory region (NO pointers),
+// Project Phase 4 (Session 7; labs/session07.md, Part D) — POD ring living entirely in a shared-memory region (NO pointers),
 // usable across processes. init() is called once by the creator before fork().
 struct ShmRing {
     static constexpr uint32_t CAPACITY = 1024;   // power of two

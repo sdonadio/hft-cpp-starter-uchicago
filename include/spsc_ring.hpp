@@ -1,7 +1,8 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
-// HW10 / Project Phase 3 — single-producer/single-consumer lock-free ring buffer.
+// HW 7 (Session 7) / Project Phase 3 — single-producer/single-consumer lock-free ring buffer.
+// Walk-through: labs/session07.md, Part C.
 struct SPSCRing {
     explicit SPSCRing(std::size_t capacity_pow2) { (void)capacity_pow2;
         // TODO(student): allocate a power-of-two buffer; atomic head/tail (acquire/release);

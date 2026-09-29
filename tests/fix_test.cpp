@@ -1,4 +1,4 @@
-// fix_test.cpp — HW11. Contract: fix_parser.hpp defines
+// fix_test.cpp — HW 8, part 1 (Session 8). Contract: fix_parser.hpp defines
 //   struct NewOrder { const char* clordid; int clordid_len; char symbol[16];
 //                     char side; uint32_t qty; double price; };
 //   bool parse_new_order(const char* buf, int len, NewOrder& out);
@@ -14,10 +14,11 @@
 static void R(const char* k, bool ok, const std::string& m) {
     std::cout << "RESULT|" << k << "|" << (ok ? "pass" : "fail") << "|" << m << "\n";
 }
-// a well-formed NewOrder-single (35=D)
+// a well-formed NewOrder-single (35=D); 9= (BodyLength) and 10= (CheckSum)
+// are the real values for these bytes, so a checksum verifier accepts it.
 static const char MSG[] =
-    "8=FIX.4.2\x01" "9=76\x01" "35=D\x01" "11=ORD123\x01" "55=AAPL\x01"
-    "54=1\x01" "38=100\x01" "44=185.50\x01" "10=072\x01";
+    "8=FIX.4.2\x01" "9=45\x01" "35=D\x01" "11=ORD123\x01" "55=AAPL\x01"
+    "54=1\x01" "38=100\x01" "44=185.50\x01" "10=179\x01";
 
 int main() {
     {
