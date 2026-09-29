@@ -2,8 +2,10 @@
 
 **FINM 32700 · Session 5 · Mon Oct 26** · 15 min in class (after the midterm) + a take-home tail
 **Repo:** your copy of the starter · **Deck:** Session 5 — *Templates, Compile-Time & CRTP*
-**Feeds:** HW 5 — *Templates & CRTP* (due Thu Nov 5, 10:59 pm CT) ·
-Project Phase 1 — *The Fast Hot Path* (due **tonight**, Mon Oct 26, 10:59 pm CT)
+**Feeds:** HW 5 — *Templates & CRTP* (steps 1–7; due Thu Nov 5, 10:59 pm CT) ·
+Project Phase 2 — *The Local Order Book* (step 8 carries into it; due Thu Nov 5, 10:59 pm CT).
+Project Phase 1 — *The Fast Hot Path* is due **tonight**, Mon Oct 26, 10:59 pm CT:
+submit what works; nothing in this lab is required for it.
 
 ## Goal
 
@@ -19,11 +21,11 @@ same `dispatch_bench` you ran last week. Every file is a complete program.
 | 1 | `max_of`, `Ring<T, N>` and two deliberate compile errors | in class (7 min) |
 | 2 | `Wire<T>`: primary, full and partial specialization | in class (7 min) |
 | 3 | Packs, folds, `if constexpr`, the `overload{}` visitor | take-home |
-| 4 | SFINAE vs a concept: the same function, two error messages | take-home |
+| 4 | SFINAE vs a concept: the same function, two error messages; the `SignalSource` concept | take-home |
 | 5 | `constexpr`, `consteval`, `static_assert`: fees and a tick table | take-home |
 | 6 | CRTP strategies + a CRTP row in `dispatch_bench` + the assembly | take-home |
 | 7 | A policy-based `Quoter`; add a third policy axis | take-home |
-| 8 | (Phase 1) the allocation-free order encoder | take-home |
+| 8 | (carry into Phase 2) the allocation-free order encoder | take-home |
 
 **Checkpoint (8:55 pm):** paste the two compile errors from step 1 in the chat.
 
@@ -222,9 +224,24 @@ twice_sfinae("no"): note: candidate template ignored: requirement 'std::is_arith
 ```
 
 Modern clang explains both; the concept version names the *requirement*, and
-you can reuse `Arithmetic` everywhere. Write one more concept, `Strategy`, that
-requires `s.signal(b)` to return something convertible to `double` (deck slide
-13), and `static_assert` that your step-6 `Momentum` satisfies it.
+you can reuse `Arithmetic` everywhere. Write one more concept, `SignalSource`
+(deck slide 13): it requires `s.signal(b)`, for a `const Book& b`, to return
+something convertible to `double`. Put it in step 6's `s5_crtp.cpp` (that is where
+`Book` lives; add `#include <concepts>`), after `Momentum`, and prove the CRTP
+strategy satisfies it:
+
+```cpp
+template <class S>
+concept SignalSource = requires(const S& s, const Book& b) {
+    { s.signal(b) } -> std::convertible_to<double>;
+};
+static_assert(SignalSource<Momentum>);      // signal() is inherited from Strategy<Momentum>
+static_assert(!SignalSource<Book>);         // a Book has no signal()
+```
+
+Do not call it `Strategy`: that name is already the CRTP base template, and
+clang rejects the second one with *redefinition of 'Strategy' as different kind
+of symbol*.
 
 ## 5. `constexpr`, `consteval`, `static_assert` (take-home)
 
@@ -364,16 +381,23 @@ and at the TODO, inside `main`:
 make dispatch
 ```
 
-Measured (Apple M4, clang 21, the new row plus two for reference):
+Measured (Apple M4, Apple clang 21, `-O2`, best of 5 × 20 M calls — the same
+run as deck slides 4 and 18):
 
 ```text
-direct (exact final type, inlined)          0.38         -         -
-virtual call through Signal*                0.70      4.32      0.73
-CRTP (static, type known)                   0.23      0.24      0.24
+dispatch mechanism                          mono     mixed    sorted   (ns per call)
+direct (exact final type, inlined)          0.22         -         -
+virtual call through Signal*                0.70      4.32      0.71
+std::variant + std::visit                   0.73      4.35      0.74
+enum tag + switch                           0.36      1.13      0.51
+function pointer                            0.68      3.69      0.69
+std::function                               0.94      4.15      0.96
+CRTP (static, type known)                   0.23      0.23      0.23
 ```
 
-CRTP is the direct call (the direct row wobbles 0.23–0.38 between builds —
-code alignment, not dispatch). Its "mixed" and "sorted" columns only repeat the
+CRTP is the direct call. (Across builds the direct row occasionally reads ~0.37
+instead of 0.22 — code alignment, not dispatch; re-run before you conclude
+anything.) Its "mixed" and "sorted" columns only repeat the
 mono number, because a CRTP call cannot *see* the run-time pattern: the type is
 fixed at compile time. Say in your write-up what you would do if the type
 really arrived at run time (a `std::variant` of CRTP types, or group by type).
@@ -392,7 +416,7 @@ proves at build time that posting beats crossing. Add a third axis,
 int qty(double spread)`, instantiate two configurations, and `static_assert`
 one property of each.
 
-## 8. (Phase 1) An allocation-free order encoder (take-home)
+## 8. (Carry into Phase 2) An allocation-free order encoder (take-home)
 
 Session 4 step 7 measured ~48 allocations per order in the stock send path.
 `scratch/s5/s5_codec.cpp` — an `if constexpr` field writer, a variadic `encode`
@@ -450,22 +474,24 @@ allocations: 0
 
 Timed on the M4 at `-O2` for the same six-field order: this encoder ~56 ns and
 0 allocations, `nlohmann::json` build + `dump()` ~1,261 ns and 41 allocations.
-Wiring it into the client's send path is Phase 1 work (the client currently
-builds orders in `ArenaClient::place_limit`); keep the before/after
-`tick_alloc` lines.
+This step is **not** part of tonight's Phase 1: submit Phase 1 as it stands.
+Wiring the encoder into the client's send path (the client currently builds
+orders in `ArenaClient::place_limit`) is work you carry into Phase 2 (due Thu
+Nov 5, 10:59 pm CT); keep the before/after `tick_alloc` lines.
 
 ## Your turn — HW 5 (*Templates & CRTP*, 10 pts, due Thu Nov 5, 10:59 pm CT)
 
-1. **(3 pts)** A class template with a non-type parameter and inline storage
-   (`Ring<T, N>` or your own), a `static_assert` on `N`, used with two element
-   types, and constrained by a concept.
-2. **(2 pts)** A variadic utility with a fold **and** an `if constexpr`
-   per-type path (the step-8 encoder qualifies), with a test.
-3. **(3 pts)** A CRTP strategy base next to its virtual twin: your
-   `dispatch_bench` CRTP row with CPU + compiler, and the `-O2 -S` lines that
-   show the indirect branch is gone.
-4. **(2 pts)** A `consteval`/`constexpr` table guarded by `static_assert`, and
-   the policy-based `Quoter` with its extra axis.
+1. **Ring<T, N> + concept (3 pts).** A class template with a non-type
+   parameter and inline storage, a `static_assert` on `N`, used with two
+   element types, constrained by a concept.
+2. **Fold + if constexpr (2 pts).** A variadic utility with a fold and an
+   `if constexpr` per-type path (the step-8 encoder qualifies), with a test.
+3. **CRTP + bench + asm (3 pts).** A CRTP strategy base next to its virtual
+   twin: your `dispatch_bench` CRTP row with CPU and compiler, and the
+   `-O2 -S` lines that show the indirect branch is gone.
+4. **constexpr table + Quoter policy (2 pts).** A `consteval`/`constexpr`
+   table guarded by `static_assert`, and the policy-based `Quoter` with a
+   third policy axis.
 
 ## Checkpoint
 
