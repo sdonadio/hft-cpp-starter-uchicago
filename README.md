@@ -33,17 +33,19 @@ make test          # = python3 tests/run_ci.py  (grades whatever you've implemen
 
 | HW | Session | File to implement | What it checks |
 |----|---------|-------------------|----------------|
-| 2  | 2 | `starters/hw02/hw2.cpp` | pointers/references, copy cost, pointer chasing (graded by hand) |
-| 6  | 6 | `include/pool.hpp` | O(1) pool alloc/free, placement new, ns/alloc |
-| 6  | 6 | `include/order_book.hpp` | flat book best bid/ask + cancel; symbol map; ns/op |
-| 7  | 7 | `include/spsc_ring.hpp` | SPSC lock-free ring + ThreadSanitizer |
-| 8  | 8 | `include/fix_parser.hpp` | single-pass FIX NewOrder parse; ns/op |
-| 8  | 8 | `include/u64toa.hpp` | fast uint64→decimal; ns/op vs std |
+| 2  | 2 | `starters/hw02/hw2.cpp` (+ your Part B class files) | pointers/references, copy cost, pointer chasing; classes, Rule of Five, RAII (graded by hand) |
+| 5  | 5 | `include/pool.hpp` | O(1) pool alloc/free, placement new, ns/alloc |
+| 5  | 5 | `include/order_book.hpp` | flat book best bid/ask + cancel; symbol map; ns/op |
+| 6  | 6 | `include/spsc_ring.hpp` | SPSC lock-free ring + ThreadSanitizer |
+| 7  | 7 | `include/fix_parser.hpp` | single-pass FIX NewOrder parse; ns/op |
+| 7  | 7 | `include/u64toa.hpp` | fast uint64→decimal; ns/op vs std |
+| 9  | 9 | `include/risk_gate.hpp` | pre-trade risk gate: limits, kill switch, throttle, self-trade prevention (HW 9) |
 
-HW 1, 3, 4, 5 and 9 have no autograder: you submit source and a write-up on
+HW 1, 2, 3, 4 and 8 have no autograder: you submit source and a write-up on
 Canvas. `starters/hw13` and `starters/hw14` (build flags, latency tail) are lab
-material for Sessions 8–9, not graded homework. `include/rolling_counter.hpp`
-is an optional Session 6 exercise: CI reports its rows, but they are not graded.
+material for Sessions 7–8, not graded homework. `include/rolling_counter.hpp`
+is an optional Session 5 exercise: CI reports its rows, but they are not graded.
+HW 2 onward is team work with your project group (one submission per group).
 
 Each stub compiles but fails its tests until you implement it — that's your
 red/green signal. The exact interface is fixed by the autograder (and repeated in

@@ -108,6 +108,14 @@ CHALLENGES = [
         "rc_mixed": ("RollingCounter: expiry as clock advances", 10)}),
     ("shm_ring.hpp", "shm_ring_test.cpp", {
         "shm_spsc": ("Shared-memory SPSC across processes (fork + mmap)", 20)}),
+    ("risk_gate.hpp", "risk_gate_test.cpp", {
+        "risk_size": ("Risk gate: size, notional, sanity", 10),
+        "risk_collar": ("Risk gate: price collar + missing reference", 10),
+        "risk_position": ("Risk gate: worst-case position incl. resting orders", 15),
+        "risk_selfcross": ("Risk gate: self-trade prevention", 10),
+        "risk_throttle": ("Risk gate: token-bucket throttle", 15),
+        "risk_dup": ("Risk gate: duplicate-order detection", 10),
+        "risk_kill": ("Risk gate: kill switch", 15)}),
 ]
 def run_challenge(header, driver, mapping):
     hdr = find(header)

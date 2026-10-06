@@ -1,4 +1,4 @@
-// fix_test.cpp — HW 8, part 1 (Session 8). Contract: fix_parser.hpp defines
+// fix_test.cpp — HW 7, part 1 (Session 7). Contract: fix_parser.hpp defines
 //   struct NewOrder { const char* clordid; int clordid_len; char symbol[16];
 //                     char side; uint32_t qty; double price; };
 //   bool parse_new_order(const char* buf, int len, NewOrder& out);

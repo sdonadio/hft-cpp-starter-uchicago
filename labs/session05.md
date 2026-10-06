@@ -1,505 +1,492 @@
-# Session 5 Lab — Templates & CRTP
+# Session 5 Lab — Memory Pools & the Order Book
 
-**FINM 32700 · Session 5 · Mon Oct 26** · 15 min in class (after the midterm) + a take-home tail
-**Repo:** your copy of the starter · **Deck:** Session 5 — *Templates, Compile-Time & CRTP*
-**Feeds:** HW 5 — *Templates & CRTP* (steps 1–7; due Thu Nov 5, 10:59 pm CT) ·
-Project Phase 2 — *The Local Order Book* (step 8 carries into it; due Thu Nov 5, 10:59 pm CT).
-Project Phase 1 — *The Fast Hot Path* is due **tonight**, Mon Oct 26, 10:59 pm CT:
-submit what works; nothing in this lab is required for it.
+**Format:** Mon Oct 26 · in class after the midterm, guided, in breakout pairs, plus a take-home tail.
+**Repo:** this starter. **Deck:** Session 5, *Memory Pools & the Order Book*.
 
 ## Goal
+Build the two headers the hot path lives on and measure them:
 
-Write templates and watch the compiler do the work: a class template whose
-capacity is part of its type; specializations; packs and folds; the `overload{}`
-visitor; SFINAE next to a concept; `consteval` fees and a compile-time table;
-and a CRTP strategy that erases Session 4's virtual call — **measured** in the
-same `dispatch_bench` you ran last week. Every file is a complete program.
+1. **`include/pool.hpp`**: a fixed-size object pool. One slab allocated once,
+   an intrusive free-list, O(1) `alloc()` / `free()`. You construct objects in
+   it with placement `new` and destroy them with an explicit destructor call.
+2. **`include/order_book.hpp`**: a flat, price-indexed `Book` with O(1)
+   `best_bid()` / `best_ask()`, indexed against a movable **band**, plus an
+   open-addressing `SymMap` (symbol → id).
 
-| Step | What | When |
-|---|---|---|
-| 0 | Setup: `scratch/s5/`, one build recipe | in class (1 min) |
-| 1 | `max_of`, `Ring<T, N>` and two deliberate compile errors | in class (7 min) |
-| 2 | `Wire<T>`: primary, full and partial specialization | in class (7 min) |
-| 3 | Packs, folds, `if constexpr`, the `overload{}` visitor | take-home |
-| 4 | SFINAE vs a concept: the same function, two error messages; the `SignalSource` concept | take-home |
-| 5 | `constexpr`, `consteval`, `static_assert`: fees and a tick table | take-home |
-| 6 | CRTP strategies + a CRTP row in `dispatch_bench` + the assembly | take-home |
-| 7 | A policy-based `Quoter`; add a third policy axis | take-home |
-| 8 | (carry into Phase 2) the allocation-free order encoder | take-home |
+Then you measure both against the standard library: `make bench-alloc` and `make bench-book`.
 
-**Checkpoint (8:55 pm):** paste the two compile errors from step 1 in the chat.
+This lab covers the autograded part of **HW 5 — A memory pool & a fast order
+book** (10 pts, due **Thu Nov 12, 10:59 pm CT**). It is also the base for
+**Project Phase 2 — The Local Order Book**, due **Thu Nov 5,
+10:59 pm CT**.
 
-## 0. Setup
+| Part | What | Where | In class? |
+|---|---|---|---|
+| A | The pool | `include/pool.hpp`, `make pool` | yes |
+| B | The book + symbol map | `include/order_book.hpp`, `make book` | yes |
+| C | Measure both | `make bench-alloc`, `make bench-book` | yes, if time |
+| D | Arena, HW 5 driver, ring + Welford, Phase 2 wiring | your files | take-home |
 
+## Setup
 ```bash
-mkdir -p scratch/s5
-clang++ -std=c++20 -O2 -Wall -Wextra -Itests scratch/s5/FILE.cpp -o /tmp/FILE && /tmp/FILE
+cd hft-cpp-starter-uchicago
+make pool      # builds tests/pool_test.cpp against include/pool.hpp: RED on the stub
+make book      # builds tests/book_test.cpp against include/order_book.hpp: RED on the stub
 ```
+Keep the header you edit in one pane and the test file in the other. **The test
+file is the contract** (read it, don't edit it). All the code below compiles
+with the Makefile's `-std=c++17 -O2` and with `-std=c++20`.
 
-C++20 is required tonight (concepts, `consteval`, aggregate CTAD). `g++` 11+
-works the same. Outputs below: Apple M4, Apple clang 21.
+---
 
-## 1–2. Templates, a class template, specializations (in class, 14 min)
+## Part A — The pool (`include/pool.hpp`)
 
-`scratch/s5/s5_templates.cpp`:
-
+The contract, from `tests/pool_test.cpp`:
 ```cpp
-#include <array>
+struct Pool { Pool(std::size_t obj_size, std::size_t capacity);
+              void* alloc(); void free(void*); };
+```
+| test | what it demands |
+|---|---|
+| `pool_basic` | `capacity` allocations, all non-null, **distinct** and **non-overlapping**. It writes a tag into every slot and reads them all back |
+| `pool_full` | the pool fills with real slots first, and **only then** does `alloc()` return `nullptr` |
+| `pool_reuse` | with the pool full, `free(a)` then `alloc()` must return **exactly `a`** |
+| `pool_pattern` | 100k fill/drain rounds, nothing leaked, no slot handed out twice |
+
+Then it prints `METRIC|pool_ns_per_op`.
+
+> **Don't trust the metric yet.** The stub's `alloc()` returns `nullptr`, and
+> timing "allocate nothing" gives ~0.4 ns/op, which is *faster* than a correct
+> pool. The test prints a `NOTE|` line saying so. The number only means
+> something once all four tests pass.
+
+### A1. Why not just `new`?
+`new`/`malloc` run a general-purpose heap: size classes, per-thread caches,
+locking, and now and then a trip to the kernel for more pages. On average that's
+about 10–20 ns, but once in a while it takes a microsecond, and those rare calls
+become your p99.9 (you'll measure it in Part C). A pool gives up generality to
+get the same cost every time. Every object is the same size, so allocating is
+just popping a pointer.
+
+### A2. One slab, owned once
+```cpp
+#pragma once
+#include <cstddef>
 #include <cstdint>
-#include <cstdio>
-#include <string>
-
-// 1. A function template: a recipe the compiler stamps out per type.
-template <class T>
-T max_of(T a, T b) { return a < b ? b : a; }
-
-// 2. A class template with a NON-TYPE parameter: capacity is part of the type.
-template <class T, std::size_t N>
-class Ring {
-    static_assert(N > 0 && (N & (N - 1)) == 0, "N must be a power of two");
-    std::array<T, N> buf_{};          // inline storage: no heap, ever
-    std::size_t head_ = 0;            // total pushes so far
-public:
-    void push(const T& x) { buf_[head_++ & (N - 1)] = x; }     // overwrite oldest
-    std::size_t size() const { return head_ < N ? head_ : N; }
-    const T& back() const { return buf_[(head_ - 1) & (N - 1)]; }
-    T sum() const {
-        T s{};                        // value-initialised: 0, 0.0, Price{0}, ...
-        for (std::size_t i = 0; i < size(); ++i) s += buf_[i];
-        return s;
-    }
-};
-
-// 3. Full specialization: a hand-tuned version for ONE exact type.
-struct Price { std::int64_t ticks; };
-template <class T> struct Wire          { static const char* fmt() { return "generic"; } };
-template <>        struct Wire<Price>   { static const char* fmt() { return "fixed-point"; } };
-template <class T> struct Wire<T*>      { static const char* fmt() { return "pointer"; } };  // partial
-
-int main() {
-    std::printf("max_of(3,4)=%d  max_of(1.5,2.5)=%.1f\n", max_of(3, 4), max_of(1.5, 2.5));
-    // max_of(3, 4.5);                // error: T deduced as int AND double
-    std::printf("max_of<double>(3,4.5)=%.1f\n", max_of<double>(3, 4.5));   // explicit T
-
-    Ring<double, 8> mids;
-    for (int i = 0; i < 10; ++i) mids.push(100.0 + i * 0.01);   // 10 pushes into 8 slots
-    std::printf("size=%zu back=%.2f sum=%.2f\n", mids.size(), mids.back(), mids.sum());
-    // Ring<int, 6> bad;              // error: static_assert — N must be a power of two
-
-    std::printf("Wire<int>=%s Wire<Price>=%s Wire<int*>=%s\n",
-                Wire<int>::fmt(), Wire<Price>::fmt(), Wire<int*>::fmt());
-    static_assert(sizeof(Ring<double, 8>) == 8 * sizeof(double) + sizeof(std::size_t));
-}
-```
-
-```text
-max_of(3,4)=4  max_of(1.5,2.5)=2.5
-max_of<double>(3,4.5)=4.5
-size=8 back=100.09 sum=800.44
-Wire<int>=generic Wire<Price>=fixed-point Wire<int*>=pointer
-```
-
-**Step 1 — break it twice.** Uncomment `max_of(3, 4.5);`:
-
-```text
-error: no matching function for call to 'max_of'
-note: candidate template ignored: deduced conflicting types for parameter 'T' ('int' vs. 'double')
-```
-
-Put it back and uncomment `Ring<int, 6> bad;`:
-
-```text
-error: static assertion failed due to requirement '(6UL & (6UL - 1)) == 0': N must be a power of two
-```
-
-Ten pushes into eight slots keep the last eight (`100.02 … 100.09`, sum
-`800.44`): the ring overwrites, it never grows, and it never touches the heap —
-`sizeof(Ring<double, 8>)` is exactly 8 doubles plus one counter.
-
-**Step 2 — specializations.** Explain in one line each why `Wire<int>`,
-`Wire<Price>` and `Wire<int*>` pick the version they do. Then predict and check
-`Wire<Price*>::fmt()` (partial beats primary: `pointer`), and add a partial
-specialization `template <class T, std::size_t N> struct Wire<Ring<T, N>>` that
-returns `"ring"`.
-
-## 3–4. Packs, folds, `if constexpr`, `overload{}`, concepts (take-home)
-
-`scratch/s5/s5_variadic.cpp`:
-
-```cpp
-#include <concepts>
-#include <cstdio>
-#include <cstdint>
-#include <cstring>
-#include <type_traits>
-#include <variant>
-
-// 1. A pack and two folds.
-template <class... Ts>
-constexpr auto sum(Ts... xs) { return (xs + ...); }            // unary right fold
-template <class... Ts>
-constexpr double avg(Ts... xs) { return sum(xs...) / double(sizeof...(xs)); }
-static_assert(sum(1, 2, 3, 4) == 10);                          // evaluated by the compiler
-
-// 2. if constexpr: one body, a different path per type, dead arms discarded.
-struct Buf { char data[64]; std::size_t n = 0; };
-template <class T>
-void put(Buf& b, T v) {
-    if constexpr (std::is_same_v<T, bool>) {
-        b.data[b.n++] = v ? 1 : 0;                             // 1 byte
-    } else if constexpr (std::is_integral_v<T>) {
-        std::memcpy(b.data + b.n, &v, sizeof v); b.n += sizeof v;
-    } else if constexpr (std::is_floating_point_v<T>) {
-        long long ticks = static_cast<long long>(v * 100.0 + 0.5);   // price -> ticks
-        std::memcpy(b.data + b.n, &ticks, sizeof ticks); b.n += sizeof ticks;
-    } else {
-        static_assert(!sizeof(T), "put(): unsupported field type");
-    }
-}
-template <class... Fs>
-void encode_all(Buf& b, const Fs&... fs) { (put(b, fs), ...); }  // fold over the comma
-
-// 3. The overload{} helper: a variadic class that inherits every lambda's operator().
-template <class... Fs> struct overload : Fs... { using Fs::operator()...; };
-template <class... Fs> overload(Fs...) -> overload<Fs...>;     // deduction guide
-
-struct BookUpdate { double mid; };
-struct Fill       { int qty; };
-struct Cancel     { unsigned long id; };
-using Msg = std::variant<BookUpdate, Fill, Cancel>;
-
-const char* route(const Msg& m) {
-    return std::visit(overload{
-        [](const BookUpdate&) { return "book"; },
-        [](const Fill&)       { return "fill"; },
-        [](const Cancel&)     { return "cancel"; },          // delete me: compile error
-    }, m);
-}
-
-// 4. Constraining a template — the old way (SFINAE) and the C++20 way (concept).
-template <class T, std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
-T twice_sfinae(T x) { return x + x; }
-
-template <class T>
-concept Arithmetic = std::is_arithmetic_v<T>;
-template <Arithmetic T>
-T twice(T x) { return x + x; }
-
-int main() {
-    std::printf("sum=%d avg=%.2f\n", sum(1, 2, 3, 4), avg(1.0, 2.0, 4.5));
-    Buf b;
-    encode_all(b, 42, 100.25, true, std::int64_t{7});
-    std::printf("encoded %zu bytes (int 4 + price 8 + bool 1 + int64 8)\n", b.n);
-    Msg msgs[] = {BookUpdate{100.01}, Fill{5}, Cancel{17}};
-    for (const auto& m : msgs) std::printf("%s ", route(m));
-    std::printf("\ntwice_sfinae(21)=%d twice(1.25)=%.2f\n", twice_sfinae(21), twice(1.25));
-    // twice("no");            // error: constraints not satisfied — 'Arithmetic'
-    // twice_sfinae("no");     // error: candidate ignored, enable_if requirement not met
-}
-```
-
-```text
-sum=10 avg=2.50
-encoded 21 bytes (int 4 + price 8 + bool 1 + int64 8)
-book fill cancel 
-twice_sfinae(21)=42 twice(1.25)=2.50
-```
-
-Step 3 exercises:
-
-- In `route`, delete the `Cancel` lambda. Clang: ``static assertion failed due
-  to requirement 'is_invocable_v<overload<…>, const Cancel &>': `std::visit`
-  requires the visitor to be exhaustive``. That is a production bug caught at
-  build time. Put it back.
-- Call `encode_all(b, 42, "AAPL")`: the `if constexpr` chain reaches its final
-  `else` — `static assertion failed … put(): unsupported field type`.
-- Add a `Heartbeat {}` alternative to `Msg` and its lambda.
-
-Step 4: uncomment `twice("no");`, then (separately) `twice_sfinae("no");`:
-
-```text
-twice("no"):        note: candidate template ignored: constraints not satisfied [with T = const char *]
-                    note: because 'const char *' does not satisfy 'Arithmetic'
-twice_sfinae("no"): note: candidate template ignored: requirement 'std::is_arithmetic_v<const char *>' was not satisfied
-```
-
-Modern clang explains both; the concept version names the *requirement*, and
-you can reuse `Arithmetic` everywhere. Write one more concept, `SignalSource`
-(deck slide 13): it requires `s.signal(b)`, for a `const Book& b`, to return
-something convertible to `double`. Put it in step 6's `s5_crtp.cpp` (that is where
-`Book` lives; add `#include <concepts>`), after `Momentum`, and prove the CRTP
-strategy satisfies it:
-
-```cpp
-template <class S>
-concept SignalSource = requires(const S& s, const Book& b) {
-    { s.signal(b) } -> std::convertible_to<double>;
-};
-static_assert(SignalSource<Momentum>);      // signal() is inherited from Strategy<Momentum>
-static_assert(!SignalSource<Book>);         // a Book has no signal()
-```
-
-Do not call it `Strategy`: that name is already the CRTP base template, and
-clang rejects the second one with *redefinition of 'Strategy' as different kind
-of symbol*.
-
-## 5. `constexpr`, `consteval`, `static_assert` (take-home)
-
-`scratch/s5/s5_compile_time.cpp`:
-
-```cpp
-#include <array>
-#include <cstdint>
-#include <cstdio>
-
-// 1. constexpr: CAN run at compile time. A table built by the compiler.
-struct TickTable {
-    std::array<std::int64_t, 256> px{};           // prices in 1/10000 dollars
-    constexpr TickTable() {
-        for (int i = 0; i < 256; ++i) px[i] = 1'000'000 + i * 100;   // $100.00 + i cents
-    }
-};
-constexpr TickTable kTicks{};                    // built entirely at compile time
-static_assert(kTicks.px[50] == 1'005'000);       // $100.50, proven before the program runs
-
-// 2. consteval: MUST run at compile time. A runtime argument is a compile error.
-consteval std::int64_t bps(double rate) { return static_cast<std::int64_t>(rate * 10'000 + 0.5); }
-constexpr std::int64_t kTakerBps = bps(0.0015);  // 15 bps
-constexpr std::int64_t kMakerBps = bps(0.0010);  // 10 bps rebate
-static_assert(kTakerBps == 15 && kMakerBps == 10);
-
-// 3. static_assert on layout: a violated assumption fails the BUILD, not the market.
-struct Level { std::int64_t px; std::int32_t qty; std::int32_t orders; };
-static_assert(sizeof(Level) == 16 && 64 % sizeof(Level) == 0, "4 levels per cache line");
-
-std::int64_t price_at(int i) { return kTicks.px[i]; }   // run time: one load from .rodata
-
-int main(int argc, char**) {
-    std::printf("px[50]=%lld taker=%lld bps maker=%lld bps\n",
-                (long long)price_at(50), (long long)kTakerBps, (long long)kMakerBps);
-    double r = 0.0015 * argc;
-    (void)r;
-    // auto bad = bps(r);        // error: call to consteval function is not a constant expression
-}
-```
-
-```text
-px[50]=1005000 taker=15 bps maker=10 bps
-```
-
-Uncomment `auto bad = bps(r);`:
-
-```text
-error: call to consteval function 'bps' is not a constant expression
-```
-
-Now make `Level` 24 bytes (add an `int64_t` field) and watch the layout
-`static_assert` fail the build. Then check where the table lives:
-`clang++ -std=c++20 -O2 -S scratch/s5/s5_compile_time.cpp -o - | grep -c kTicks`
-— it is data in the binary, not code that runs at startup.
-
-## 6. CRTP — and the number (take-home)
-
-`scratch/s5/s5_crtp.cpp` (also holds step 7's `Quoter`):
-
-```cpp
-#include <cstdio>
-
-struct Book { double bid, ask, mid, microprice, obi; };
-
-// 1. CRTP: the base knows the derived type, so the call is bound at compile time.
-template <class Derived>
-struct Strategy {
-    double signal(const Book& b) const {
-        return static_cast<const Derived*>(this)->signal_impl(b);   // no vtable
-    }
-    int side(const Book& b) const {                                 // shared logic, written once
-        double s = signal(b);
-        return s > 0.1 ? +1 : (s < -0.1 ? -1 : 0);
-    }
-};
-struct Momentum : Strategy<Momentum> {
-    double signal_impl(const Book& b) const { return 0.5 * b.obi; }
-};
-struct MeanRevert : Strategy<MeanRevert> {
-    double signal_impl(const Book& b) const { return -40.0 * (b.microprice - b.mid); }
-};
-
-// No common base pointer: generic code takes the CRTP base by template.
-template <class S>
-int decide(const Strategy<S>& s, const Book& b) { return s.side(b); }
-
-// 2. Policy-based design: behaviour as template parameters.
-struct TakerFees { static constexpr double rate = +0.0015; };   // pay to cross
-struct MakerFees { static constexpr double rate = -0.0010; };   // rebate for resting
-struct NoSkew    { static constexpr double skew(int)     { return 0.0; } };
-struct LinSkew   { static constexpr double skew(int pos) { return -0.001 * pos; } };
-
-template <class FeePolicy, class SkewPolicy>
-struct Quoter {
-    // edge per share after fees, for a quote at px, holding pos shares
-    static constexpr double edge(double half_spread, double px, int pos) {
-        return half_spread - FeePolicy::rate * px + SkewPolicy::skew(pos);
-    }
-};
-using Aggressive = Quoter<TakerFees, NoSkew>;
-using Passive    = Quoter<MakerFees, LinSkew>;
-static_assert(Passive::edge(0.01, 100.0, 0) > Aggressive::edge(0.01, 100.0, 0));
-
-int main() {
-    const Book b{100.00, 100.02, 100.01, 100.015, 0.40};
-    Momentum m; MeanRevert r;
-    std::printf("momentum side=%+d  meanrevert side=%+d\n", decide(m, b), decide(r, b));
-    std::printf("edge/share at $100, half-spread 1c: aggressive=%+.4f passive=%+.4f\n",
-                Aggressive::edge(0.01, 100.0, 0), Passive::edge(0.01, 100.0, 0));
-}
-```
-
-```text
-momentum side=+1  meanrevert side=-1
-edge/share at $100, half-spread 1c: aggressive=-0.1400 passive=+0.1100
-```
-
-Now fill Session 4's TODO in `starters/session04/dispatch_bench.cpp`. Above the
-`// ── harness` line add:
-
-```cpp
-template <class D> struct CSignal {
-    long f(long x) const { return static_cast<const D*>(this)->f_impl(x); }
-};
-struct CTwice : CSignal<CTwice> { long f_impl(long x) const { return 2 * x; } };
-```
-
-and at the TODO, inside `main`:
-
-```cpp
-    CTwice ct;
-    measure("CRTP (static, type known)", [&](const Set&, std::size_t, long x) { return ct.f(x); });
-```
-
-```bash
-make dispatch
-```
-
-Measured (Apple M4, Apple clang 21, `-O2`, best of 5 × 20 M calls — the same
-run as deck slides 4 and 18):
-
-```text
-dispatch mechanism                          mono     mixed    sorted   (ns per call)
-direct (exact final type, inlined)          0.22         -         -
-virtual call through Signal*                0.70      4.32      0.71
-std::variant + std::visit                   0.73      4.35      0.74
-enum tag + switch                           0.36      1.13      0.51
-function pointer                            0.68      3.69      0.69
-std::function                               0.94      4.15      0.96
-CRTP (static, type known)                   0.23      0.23      0.23
-```
-
-CRTP is the direct call. (Across builds the direct row occasionally reads ~0.37
-instead of 0.22 — code alignment, not dispatch; re-run before you conclude
-anything.) Its "mixed" and "sorted" columns only repeat the
-mono number, because a CRTP call cannot *see* the run-time pattern: the type is
-fixed at compile time. Say in your write-up what you would do if the type
-really arrived at run time (a `std::variant` of CRTP types, or group by type).
-
-Evidence from the compiler: the Session 4 lab's `asm_demo.cpp` already has
-`call_crtp`; `-O2 -S` shows `lsl x0, x1, #1` / `ret` (x86: `leaq (%rsi,%rsi), %rax`)
-against `ldr`/`ldr`/`br` for `call_virtual`. Rebuild at `-O0` and the `bl`/`call`
-reappears: "zero-cost" is the optimiser's work, not a property of the syntax.
-
-## 7. Policy-based design (take-home)
-
-`Quoter<FeePolicy, SkewPolicy>` in `s5_crtp.cpp` already has two axes. At $100
-the taker fee is $0.15 a share against a $0.01 half-spread; the `static_assert`
-proves at build time that posting beats crossing. Add a third axis,
-`SizePolicy` (e.g. `FixedSize<1>` vs `InvSpreadSize`), with a `static constexpr
-int qty(double spread)`, instantiate two configurations, and `static_assert`
-one property of each.
-
-## 8. (Carry into Phase 2) An allocation-free order encoder (take-home)
-
-Session 4 step 7 measured ~48 allocations per order in the stock send path.
-`scratch/s5/s5_codec.cpp` — an `if constexpr` field writer, a variadic `encode`
-folded over fields, `std::to_chars` into a reused buffer, and a counting
-`operator new` to prove it:
-
-```cpp
-#include <charconv>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <iterator>
 #include <new>
-#include <string_view>
-#include <type_traits>
 
-static long g_allocs = 0;                              // count heap allocations
-void* operator new(std::size_t n) { ++g_allocs; if (void* p = std::malloc(n)) return p; throw std::bad_alloc{}; }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-
-struct Buf {                                           // reused, fixed capacity
-    char d[256]; std::size_t n = 0;
-    void raw(std::string_view s) { std::memcpy(d + n, s.data(), s.size()); n += s.size(); }
+struct Pool {
+    Pool(std::size_t obj_size, std::size_t capacity)
+        : slot_(round_up(obj_size < sizeof(void*) ? sizeof(void*) : obj_size)),
+          cap_(capacity) {
+        buf_  = static_cast<std::uint8_t*>(::operator new(slot_ * cap_));
+        head_ = nullptr;
+        for (std::size_t i = cap_; i-- > 0; )      // thread every slot, back to front
+            free(buf_ + i * slot_);
+    }
+    ~Pool() { ::operator delete(buf_); }
+    Pool(const Pool&) = delete;                     // one owner of the slab (Session 2)
+    Pool& operator=(const Pool&) = delete;
+    // alloc() and free() go here: A3, A4
+private:
+    static std::size_t round_up(std::size_t n) {    // keep every slot max-aligned
+        constexpr std::size_t A = alignof(std::max_align_t);
+        return (n + A - 1) & ~(A - 1);
+    }
+    std::size_t   slot_, cap_;
+    std::uint8_t* buf_;
+    void*         head_;                            // top of the free-list
 };
-template <class T>
-void put(Buf& b, std::string_view key, const T& v) {
-    b.raw(b.n > 1 ? ",\"" : "\""); b.raw(key); b.raw("\":");
-    if constexpr (std::is_same_v<T, bool>) b.raw(v ? "true" : "false");
-    else if constexpr (std::is_arithmetic_v<T>)            // int, double: no alloc
-        b.n = std::to_chars(b.d + b.n, std::end(b.d), v).ptr - b.d;
-    else { b.raw("\""); b.raw(v); b.raw("\""); }            // string-like
-}
-template <class T> struct F { std::string_view key; T val; };   // one field
-template <class... Ts>
-void encode(Buf& b, const F<Ts>&... fs) {
-    b.n = 0; b.raw("{");
-    (put(b, fs.key, fs.val), ...);                     // fold: one put per field
-    b.raw("}");
-}
-int main() {
-    Buf b;
-    long a0 = g_allocs;
-    encode(b, F{"type", "place_order"}, F{"symbol", "NVDA"}, F{"side", "buy"},
-              F{"order_type", "limit"}, F{"price", 100.25}, F{"quantity", 5});
-    long a1 = g_allocs;
-    std::printf("%.*s\nallocations: %ld\n", int(b.n), b.d, a1 - a0);
-}
+```
+- **Why a slot is at least `sizeof(void*)`:** a *free* slot stores the address
+  of the next free slot inside itself. This is an intrusive free-list, and it
+  costs zero extra memory.
+- **Why `round_up`:** `::operator new` returns memory aligned for any type, but
+  slot *i* starts at `buf_ + i * slot_`. With `obj_size = 12` the second slot
+  would sit at offset 12, which is misaligned for a `double`. Rounding
+  `slot_` up to `alignof(std::max_align_t)` keeps every slot aligned. (The
+  tests use `obj_size = 8`, so CI won't catch it if you skip this. Your
+  `Order` will.)
+- **Why the copy is deleted:** two `Pool` copies would `delete` the same slab
+  twice. That's the Rule of Five from Session 2.
+
+### A3. `alloc()`: pop, O(1)
+```cpp
+    void* alloc() {
+        if (!head_) return nullptr;                 // exhausted: the tests rely on this
+        void* p = head_;
+        head_ = *static_cast<void**>(head_);        // head = head->next
+        return p;
+    }
 ```
 
+### A4. `free()`: push, O(1)
+```cpp
+    void free(void* p) {
+        if (!p) return;
+        *static_cast<void**>(p) = head_;            // p->next = head
+        head_ = p;
+    }
+```
+The constructor builds the initial list by calling `free()` on every slot, back
+to front, so the first `alloc()` returns slot 0.
+
+### A5. Placement `new` + explicit destructor
+The pool gives you raw bytes. To make a live object you construct it in place.
+Because *you* started its lifetime, *you* end it. `delete` would be wrong here,
+since it would hand the heap memory the heap never gave you.
+```cpp
+void* m = pool.alloc();
+if (!m) return;                                      // never placement-new a null pointer
+Order* o = new (m) Order{id, px, qty};               // construct in the slot
+// ... use o ...
+o->~Order();                                         // end its life
+pool.free(o);                                        // give the slot back
+```
+Say it out loud: **placement `new` to construct, `~T()` to destroy, `free` to
+reclaim.** If you forget the `free`, `alloc()` returns `nullptr` after
+`capacity` ticks and your bot goes quiet without crashing.
+
+### A6. Run it
+```bash
+make pool
+```
 ```text
-{"type":"place_order","symbol":"NVDA","side":"buy","order_type":"limit","price":100.25,"quantity":5}
-allocations: 0
+RESULT|pool_basic|pass|4 distinct, writable, non-overlapping slots
+RESULT|pool_full|pass|3 distinct slots, then alloc past capacity -> null
+RESULT|pool_reuse|pass|freed slot reused
+RESULT|pool_pattern|pass|100k fill/drain rounds OK
+METRIC|pool_ns_per_op|0.54
+```
+That metric is from an Apple M4 laptop (Apple clang 21, `-O2`). Expect well
+under 1 ns/op, and don't chase the third digit: an alloc+free pair is a couple
+of loads and stores, so it's in timer noise. If you see several ns, you're
+doing more work than a free-list pop. If you see exactly 0, the benchmark's sink
+is missing.
+
+---
+
+## Part B — The book (`include/order_book.hpp`)
+
+The contract, from the stub and `tests/book_test.cpp`:
+```cpp
+struct Book {
+    void   add(uint64_t id, char side, double px, uint32_t qty); // 'B' = bid, 'S' = ask
+    void   cancel(uint64_t id);
+    double best_bid() const;   // O(1); 0.0 if the side is empty
+    double best_ask() const;   // O(1); 0.0 if the side is empty
+};
+struct SymMap {                // get() returns (uint64_t)-1 if absent
+    void     put(const char* sym, uint64_t id);
+    uint64_t get(const char* sym) const;
+};
 ```
 
-Timed on the M4 at `-O2` for the same six-field order: this encoder ~56 ns and
-0 allocations, `nlohmann::json` build + `dump()` ~1,261 ns and 41 allocations.
-This step is **not** part of tonight's Phase 1: submit Phase 1 as it stands.
-Wiring the encoder into the client's send path (the client currently builds
-orders in `ArenaClient::place_limit`) is work you carry into Phase 2 (due Thu
-Nov 5, 10:59 pm CT); keep the before/after `tick_alloc` lines.
+### B1. Why not `std::map<double, Level>`?
+A tree gives O(log n) add and cancel, and every node is a separate heap
+allocation. Walking to the best price chases pointers across memory. But prices
+aren't arbitrary doubles: they sit on a **tick grid** ($0.01 here). That lets a
+price become an **array index**, so the common operations are O(1) and every
+access goes to one contiguous array.
 
-## Your turn — HW 5 (*Templates & CRTP*, 10 pts, due Thu Nov 5, 10:59 pm CT)
+### B2. Ticks and a price-indexed **band** (read this before you write code)
+```cpp
+#pragma once
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstdio>
+#include <unordered_map>
 
-1. **Ring<T, N> + concept (3 pts).** A class template with a non-type
-   parameter and inline storage, a `static_assert` on `N`, used with two
-   element types, constrained by a concept.
-2. **Fold + if constexpr (2 pts).** A variadic utility with a fold and an
-   `if constexpr` per-type path (the step-8 encoder qualifies), with a test.
-3. **CRTP + bench + asm (3 pts).** A CRTP strategy base next to its virtual
-   twin: your `dispatch_bench` CRTP row with CPU and compiler, and the
-   `-O2 -S` lines that show the indirect branch is gone.
-4. **constexpr table + Quoter policy (2 pts).** A `consteval`/`constexpr`
-   table guarded by `static_assert`, and the policy-based `Quoter` with a
-   third policy axis.
+static constexpr double TICK = 0.01;
+static constexpr int    NLEV = 1 << 16;          // 65,536 contiguous slots = a BAND
+
+static inline int px_to_tick(double px) {
+    return static_cast<int>(px / TICK + 0.5);    // round to the nearest tick
+}
+```
+`NLEV` one-cent slots cover **$655.35**. If you index *absolutely* (slot = tick,
+so slot 0 = $0.00), your book stops at $655.35. The arena lists **NFLX near
+$720** (`plugins/securities/defaults.py`). A bid at $719.98 is tick 71,998,
+which is 6,462 slots past the end of `bid_qty`. `bid_qty` and `ask_qty` are
+adjacent members, so that write lands in `ask_qty` and **adds quantity to the
+ask side at $64.62**.
+
+It won't crash. `-fsanitize=address` won't report it either, because ASan
+checks the boundaries *between* allocations, not the boundaries between two
+members of one object. And the autograder only uses prices near $100, so CI
+stays green. You end up with a book that shows size nobody quoted, and a bot
+that crosses a spread that doesn't exist.
+
+The fix is **not** "make the array bigger": an absolute array wide enough for a
+$5,000 stock is megabytes of empty slots, and it throws away the small working
+set you built this structure for. Instead, index against a **base**:
+`slot = tick - base_tick_`. Centre the band on the first price you see, and
+bounds-check both ends on every write.
+
+### B3. The level arrays
+```cpp
+struct Book {
+    std::array<uint32_t, NLEV> bid_qty{};   // resting qty per bid slot
+    std::array<uint32_t, NLEV> ask_qty{};   // resting qty per ask slot
+    int  base_tick_ = 0;                    // absolute tick of slot 0
+    bool based_     = false;                // has the band been placed yet?
+    int best_bid_slot = -1;                 // highest bid slot with qty > 0
+    int best_ask_slot = -1;                 // lowest  ask slot with qty > 0
+
+    int slot_of(int tick) {                 // the first price centres the band
+        if (!based_) { base_tick_ = std::max(0, tick - NLEV / 2); based_ = true; }
+        return tick - base_tick_;
+    }
+    double px_of(int slot) const { return (slot + base_tick_) * TICK; }
+
+    struct Rec { char side; int slot; uint32_t qty; };
+    std::unordered_map<uint64_t, Rec> orders_;   // id -> what cancel must undo
+    // add / cancel / best_bid / best_ask: B4-B6
+};
+```
+The best slots are tracked explicitly, so reading the touch (the hot path)
+never scans. Add and cancel pay a little to keep them fresh. `slot_of` isn't
+`const` because it may place the band. Only the write path can move it.
+
+### B4. `add`: update qty, nudge the touch
+```cpp
+    void add(uint64_t id, char side, double px, uint32_t qty) {
+        int i = slot_of(px_to_tick(px));
+        if (i < 0 || i >= NLEV) return;          // outside the band: refuse, don't scribble
+        orders_[id] = {side, i, qty};
+        if (side == 'B') {
+            bid_qty[i] += qty;
+            if (i > best_bid_slot) best_bid_slot = i;
+        } else {
+            ask_qty[i] += qty;
+            if (best_ask_slot < 0 || i < best_ask_slot) best_ask_slot = i;
+        }
+    }
+```
+
+### B5. `best_bid` / `best_ask`: pure O(1) reads
+```cpp
+    double best_bid() const { return best_bid_slot < 0 ? 0.0 : px_of(best_bid_slot); }
+    double best_ask() const { return best_ask_slot < 0 ? 0.0 : px_of(best_ask_slot); }
+```
+
+### B6. `cancel`: the only place we scan
+```cpp
+    void cancel(uint64_t id) {
+        auto it = orders_.find(id);
+        if (it == orders_.end()) return;
+        Rec r = it->second; orders_.erase(it);
+        if (r.side == 'B') {
+            bid_qty[r.slot] -= r.qty;
+            if (r.slot == best_bid_slot && bid_qty[r.slot] == 0)
+                while (best_bid_slot >= 0 && bid_qty[best_bid_slot] == 0) --best_bid_slot;
+        } else {
+            ask_qty[r.slot] -= r.qty;
+            if (r.slot == best_ask_slot && ask_qty[r.slot] == 0) {
+                while (best_ask_slot < NLEV && ask_qty[best_ask_slot] == 0) ++best_ask_slot;
+                if (best_ask_slot >= NLEV) best_ask_slot = -1;   // side is empty
+            }
+        }
+    }
+```
+Both scans are bounded on both ends. `--best_bid_slot` stops at `-1`, and the
+ask scan resets to the `-1` sentinel if it runs off the end. The scan only runs
+when the **touch** empties, and it walks adjacent slots. The common case,
+cancelling away from the top, is a single subtraction.
+
+### B7. `SymMap`: open addressing, no per-lookup allocation
+```cpp
+struct SymMap {
+    static constexpr int CAP = 1 << 12;             // power of two: mask, not %
+    struct Slot { char key[16]{}; uint64_t id = (uint64_t)-1; bool used = false; };
+    std::array<Slot, CAP> t_{};
+
+    static uint64_t hash(const char* s) {           // FNV-1a
+        uint64_t h = 1469598103934665603ull;
+        for (; *s; ++s) { h ^= (uint8_t)*s; h *= 1099511628211ull; }
+        return h;
+    }
+    static bool keq(const char* a, const char* b) {
+        for (int i = 0; i < 16; ++i) { if (a[i] != b[i]) return false; if (!a[i]) return true; }
+        return true;
+    }
+    void put(const char* sym, uint64_t id) {
+        int i = hash(sym) & (CAP - 1);
+        for (;; i = (i + 1) & (CAP - 1)) {          // linear probe
+            if (!t_[i].used || keq(t_[i].key, sym)) {
+                std::snprintf(t_[i].key, 16, "%s", sym);
+                t_[i].id = id; t_[i].used = true; return;
+            }
+        }
+    }
+    uint64_t get(const char* sym) const {
+        int i = hash(sym) & (CAP - 1);
+        for (;; i = (i + 1) & (CAP - 1)) {
+            if (!t_[i].used)         return (uint64_t)-1;   // empty slot: absent
+            if (keq(t_[i].key, sym)) return t_[i].id;
+        }
+    }
+};
+```
+The table is one contiguous array, it probes with a mask instead of `%`, and a
+lookup allocates nothing. Compare that with `std::unordered_map<std::string, …>`,
+which builds and hashes a `std::string` on every call. (Keys are at most 15
+characters plus the terminator. The test uses `"BRK.B"`.)
+
+### B8. Run it
+```bash
+make book
+```
+```text
+RESULT|book_bbo|pass|best bid/ask + cancel correct
+RESULT|symmap|pass|put/get/overwrite/absent correct
+METRIC|book_bbo_ns_per_op|0.55
+METRIC|symmap_get_ns_per_op|2.65
+```
+(Apple M4, `-O2`.) Then `make test` should show `book_bbo` 12 pts and `symmap`
+8 pts on top of the pool's 25.
+
+---
+
+## Part C — Measure both (`starters/session05/`)
+
+These two drivers use **your** headers, so they refuse to run on the stubs.
+
+```bash
+make bench-alloc     # new/delete vs your Pool: 256 live orders, random free + re-alloc
+make bench-book      # your Book / SymMap vs std::map / std::unordered_map
+```
+One run on an Apple M4 (Apple clang 21, `-O2`):
+```text
+new/delete  mean  11.36 ns | per-pair, batches of 16: p50 10.44  p99 15.62  p99.9 18.25  max  632.8 ns
+Pool        mean   1.37 ns | per-pair, batches of 16: p50  2.56  p99  2.62  p99.9  2.62  max    7.8 ns
+
+BBO read     flat   0.51 ns   std::map   0.92 ns
+add+cancel   flat  19.19 ns   std::map  37.48 ns  (both keep an unordered_map id index)
+symbol->id   SymMap   2.93 ns   unordered_map<string>  10.70 ns (builds a std::string per call)
+```
+How to read it, and what to write down:
+- The tail is timed in **batches of 16**. On a laptop the clock ticks in ~42 ns
+  steps (macOS `steady_clock`, and the arm64 timer even on an M4), so you can't
+  time one 2 ns operation, but you can time 16 of them.
+- Across seven runs: new/delete had a mean of 11–21 ns and a max of 0.5–0.9 µs
+  **every** run. The pool had a mean of 1.4–1.6 ns and a max of 8–10 ns, except
+  in about half the runs, where a timer interrupt landed in a batch (~0.4 µs).
+  The max measures your OS as well as your code. Say so in your note.
+- `add+cancel` is only 1.4–2× better. Look at why: the reference `Book` keeps
+  its id → order index in a `std::unordered_map`, and that index is now the
+  bottleneck. Replacing it (open addressing, pooled nodes) is a Phase 2
+  improvement, not a HW 5 requirement.
+
+Your numbers will differ. That's the point: **report yours, with your machine
+and compiler.**
+
+---
+
+## Part D — Take-home tail
+
+### D1. An arena (bump) allocator
+Sketch it in a scratch file. It's in the deck, but it isn't graded:
+```cpp
+#include <cstddef>
+
+class Arena {                                    // bump / monotonic allocator
+    std::byte*  base_;                           // max-aligned slab you own
+    std::size_t cap_, off_ = 0;
+public:
+    Arena(std::byte* buf, std::size_t n) : base_(buf), cap_(n) {}
+    void* alloc(std::size_t n, std::size_t align) {      // align is a power of two
+        std::size_t p = (off_ + align - 1) & ~(align - 1);
+        if (p + n > cap_) return nullptr;
+        off_ = p + n;
+        return base_ + p;
+    }
+    void reset() { off_ = 0; }                   // end of tick: everything freed, O(1)
+};
+```
+Give it an `alignas(64) std::byte buf[64 * 1024]` that you keep as a member or
+a `static`, not a local. Time `alloc(sizeof(Order), alignof(Order))` against
+your pool. The arena should win: it's one add, one mask and one compare. When is
+it the wrong tool? When objects don't all die at the same time, or when they
+need their destructors run.
+
+### D2. The HW 5 driver (2 of the 10 points)
+One small `main` that exercises placement `new` through your pool **and** the
+band test. Put it anywhere, e.g. `scratch/hw5_driver.cpp` (the folder is
+git-ignored, so commit it somewhere else if you want it graded):
+```cpp
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <new>
+#include "pool.hpp"
+#include "order_book.hpp"
+
+struct Order { std::uint64_t id; double px; std::uint32_t qty; };
+
+int main() {
+    Pool pool(sizeof(Order), 2);
+    void* m = pool.alloc();
+    Order* o = new (m) Order{1, 719.98, 10};       // construct in the slot
+    assert(o->qty == 10);
+    o->~Order();                                   // explicit destructor
+    pool.free(o);
+    assert(pool.alloc() == m);                     // the slot came back
+
+    static Book b;                                 // 512 KB: static, not a local
+    b.add(1, 'B', 719.98, 10);                     // NFLX-like prices: the band centres here
+    b.add(2, 'S', 720.02, 10);
+    b.add(3, 'B', 100.00, 10);                     // outside the band: must be REFUSED
+    std::printf("BBO %.2f / %.2f\n", b.best_bid(), b.best_ask());
+    assert(b.best_bid() > 719.97 && b.best_bid() < 719.99);
+    assert(b.best_ask() > 720.01 && b.best_ask() < 720.03);
+}
+```
+```bash
+g++ -std=c++17 -O2 -Iinclude scratch/hw5_driver.cpp -o /tmp/hw5 && /tmp/hw5
+# BBO 719.98 / 720.02
+```
+Then answer in one line: what will your Phase 2 book do *instead of refusing*
+when the market walks out of the band? (Re-base the band and re-key the resting
+levels.)
+
+### D3. The ring buffer and Welford, checked by hand
+Type in the deck's `Ring<T, N>` (with its `static_assert`) and the `Online`
+struct. Feed `Online` the values 1, 2, 3, 4, 5. You should get mean 3 and sample
+variance 2.5. Check that by hand before you trust it on prices. Then try
+`Ring<double, 100>` and read the error the `static_assert` gives you.
+
+### D4. Wire it into your bot (Project Phase 2, due Thu Nov 5)
+In your bot's `on_book`:
+1. Map the symbol to a small int **once** with `SymMap`. After that, every
+   access is `st_[k]`, a fixed array of per-symbol state.
+2. Keep the touch as integer ticks, and keep **your own resting orders** in
+   pooled slots with the `queue_ahead` / `level_qty` that `on_ack` and
+   `on_queue` report.
+3. Find every hidden allocation on the path (`std::string` temporaries, map
+   inserts, vector growth), remove it or move it off the path, and re-measure
+   against your Phase 1 numbers with
+   `scripts/latency_replay.py --latest --cmd './hft/cpp_client/build/hft_bot --replay'`.
+
+### D5. Optional: the sliding-window counter
+`include/rolling_counter.hpp` / `make rolling` implements the event counter from
+the deck's appendix (A3). It's ungraded this term. Do it if you want practice
+with amortized O(1) and the unsigned-underflow trap.
 
 ## Checkpoint
-
-- Step 1: both compile errors reproduced and explained.
-- Step 3: deleting a visitor lambda breaks the build.
-- Step 6: your CRTP row matches your direct row, not your virtual row.
-- Step 8: `allocations: 0`.
+- `make pool`: four `pass` lines. `make book`: `book_bbo` and `symmap` both pass.
+- Two measured ratios from Part C, with your machine stated, plus **one sentence
+  on why the pool's number is stable** and not just small.
+- You can say in one sentence why the flat book reads the touch in O(1), and
+  where the only scan happens (cancelling the last order at the touch).
+- You can say why NFLX at $720 would corrupt an absolute-indexed book while CI
+  stays green.
 
 ## Links
-Session 5 deck · HW 5 · Session 4 lab (`labs/session04.md`, `dispatch_bench.cpp`) ·
-Next: Session 6 lab (`labs/session06.md`).
+- Edit: `include/pool.hpp`, `include/order_book.hpp`
+- Contracts (read-only): `tests/pool_test.cpp`, `tests/book_test.cpp`, `tests/bench.hpp`
+- Measurements: `starters/session05/bench_alloc.cpp`, `starters/session05/bench_book.cpp`
+- Reference CLOB (price-time priority, queue position): `shared/orderbook.py` in the arena repo
+- Client hooks (`on_book`, `on_ack`, `on_queue`): `hft/cpp_client/include/hft_bot.hpp`, `docs/HFT_CPP_CLIENT.md`
+- Build: `make pool`, `make book`, `make bench-alloc`, `make bench-book`, full grade `make test`

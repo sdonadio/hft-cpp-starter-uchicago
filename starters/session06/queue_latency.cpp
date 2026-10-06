@@ -1,8 +1,8 @@
-// queue_latency.cpp — Session 7 lab, step 7. One-way latency through a queue:
+// queue_latency.cpp — Session 6 lab, step 7. One-way latency through a queue:
 // the producer stamps each item and pushes it at a steady rate; the consumer
 // pops it and records (now - stamp). Two queues: std::mutex + std::deque, and
 // YOUR lock-free SPSCRing (include/spsc_ring.hpp).
-//   g++ -std=c++17 -O2 -pthread -Iinclude starters/session07/queue_latency.cpp -o /tmp/qlat && /tmp/qlat
+//   g++ -std=c++17 -O2 -pthread -Iinclude starters/session06/queue_latency.cpp -o /tmp/qlat && /tmp/qlat
 // Latencies are cross-thread steady_clock deltas: on macOS that clock ticks in
 // ~42 ns steps, so read p50 as "under ~100 ns" and look hard at the tail.
 #include <algorithm>

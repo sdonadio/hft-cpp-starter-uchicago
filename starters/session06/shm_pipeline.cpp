@@ -1,7 +1,7 @@
-// shm_pipeline.cpp — Session 7 lab, step 9 / Project Phase 4 starting point.
+// shm_pipeline.cpp — Session 6 lab, step 9 / Project Phase 4 starting point.
 // Two SEPARATE processes share YOUR ShmRing (include/shm_ring.hpp) through a
 // named POSIX shared-memory object. Run the strategy first, then the feed:
-//   g++ -std=c++17 -O2 -Iinclude starters/session07/shm_pipeline.cpp -o /tmp/shm_pipe
+//   g++ -std=c++17 -O2 -Iinclude starters/session06/shm_pipeline.cpp -o /tmp/shm_pipe
 //   /tmp/shm_pipe strategy &      # creates + init()s the region, then consumes
 //   /tmp/shm_pipe feed            # maps the SAME region, produces 1,000,000 ticks
 // (Linux may need -lrt on older glibc.)

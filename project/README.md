@@ -10,13 +10,13 @@ Get and build the arena C++ client first: see [`../docs/HFT_CPP_CLIENT.md`](../d
 | Phase | Sessions | You build | Graded on |
 |------:|-------|-----------|-----------|
 | 0 | 1–2 | Connect the client; react in `on_book`; place/cancel | on the LATENCY board + baseline p50/p99/p99.9 |
-| 1 | 3–5 | No-alloc hot path; compile-time codec (variant/CRTP) | tick-to-trade vs your baseline |
-| 2 | 6 | Cache-friendly local book; track `queue_ahead` | hot-path latency + book correctness |
-| 3 | 7 | Threaded pipeline + **`include/spsc_ring.hpp`** | throughput + p99.9 + ThreadSanitizer |
-| 4 | 7 | Multi-process gateway/strategy + **`include/shm_ring.hpp`** | cross-process IPC latency + resilience |
-| 5 | 8 | SIMD/prefetch/LTO; colocation trade-off | end-to-end p50/p99.9 |
-| 6 | 9 | Profile & kill the tail | measured p99.9 reduction |
-| 7 | 9 | A real strategy in the tournament scenario | composite (latency + queue + fill + markout) |
+| 1 | 2–4 | No-alloc hot path; compile-time codec (variant/CRTP) | tick-to-trade vs your baseline |
+| 2 | 5 | Cache-friendly local book; track `queue_ahead` | hot-path latency + book correctness |
+| 3 | 6 | Threaded pipeline + **`include/spsc_ring.hpp`** | throughput + p99.9 + ThreadSanitizer |
+| 4 | 6 | Multi-process gateway/strategy + **`include/shm_ring.hpp`** | cross-process IPC latency + resilience |
+| 5 | 7 | SIMD/prefetch/LTO; colocation trade-off | end-to-end p50/p99.9 |
+| 6 | 8 | Profile & kill the tail | measured p99.9 reduction |
+| 7 | 8–9 (live in 9) | A real strategy in the tournament scenario | composite (latency + queue + fill + markout) |
 
 ## Deliverable per phase
 

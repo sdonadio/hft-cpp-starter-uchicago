@@ -1,4 +1,4 @@
-# HW 2 — pointers, references & the cost of a copy.
+# HW 2, Part A — pointers, references & the cost of a copy (Part B: see README.md).
 #
 #   make          build -O2 and run           (this is the build you report)
 #   make debug    build -O0 and run           (to SEE why a debug build lies)

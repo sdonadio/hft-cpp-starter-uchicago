@@ -1,4 +1,4 @@
-// rolling_counter_test.cpp — HW8. Contract: rolling_counter.hpp defines
+// rolling_counter_test.cpp — optional, ungraded (Session 5 lab, D5). Contract: rolling_counter.hpp defines
 //   struct RollingCounter {
 //     explicit RollingCounter(uint64_t window_ns);
 //     void add(uint64_t ts_ns);            // record an event

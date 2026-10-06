@@ -1,4 +1,4 @@
-// hw2.cpp — HW 2 "Pointers, references & the cost of a copy"  (10 pts)
+// hw2.cpp — HW 2, Part A "Pointers, references & the cost of a copy"  (5 of the 10 pts; Part B = classes / Rule of Five / RAII, see README.md)
 //
 // Build (release — a debug build measures nothing real):
 //     g++ -std=c++17 -O2 -Wall hw2.cpp -o hw2 && ./hw2

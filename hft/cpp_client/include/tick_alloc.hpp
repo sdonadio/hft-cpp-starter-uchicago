@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// tick_alloc.hpp — count heap allocations on your hot path (Session 4 lab).
+// tick_alloc.hpp — count heap allocations on your hot path (Session 3 lab).
 //
 // Replaces the global operator new with a counting version, and gives you two
 // RAII scopes:

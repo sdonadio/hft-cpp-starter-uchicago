@@ -1,8 +1,10 @@
-# HW 2 — Pointers, references & the cost of a copy
+# HW 2 — Pointers, classes, the Rule of Five & RAII
 
-**10 points · individual · due Thu Oct 15, 2026, 10:59 pm CT · submit on Canvas**
+**10 points · team work (your 2026Autumn project group, one submission per group) · due Thu Oct 22, 2026, 10:59 pm CT · submit on Canvas**
 
-Session 2 said: *a reference is an alias, a pointer is an address, a copy costs
+Two parts, one submission. **Part A** (5 pts) is the pointers-and-cost-of-a-copy harness in this folder (`hw2.cpp`). **Part B** (5 pts) is the classes / Rule of Five / RAII work from the Session 2 lab, Part B (`labs/session02.md`, steps 7–13): you write those classes in your own files (e.g. `price_buffer.cpp`, `raii.cpp`, `instrument.cpp`) next to `hw2.cpp` — see "Part B" below.
+
+Part A. Session 2 said: *a reference is an alias, a pointer is an address, a copy costs
 bytes, and a cache miss costs ~100 ns.* This homework makes you prove all four
 with a clock instead of taking my word for it.
 
@@ -39,10 +41,10 @@ Four TODO blocks in `hw2.cpp`. **The signatures are fixed — do not change them
 
 | TODO | Function | Points |
 |------|----------|--------|
-| 1a / 1b | `void swap_ref(int&, int&)` and `void swap_ptr(int*, int*)` | 3 |
-| 2a / 2b | `double sum_by_value(Big)` and `double sum_by_cref(const Big&)` | 3 |
-| 3a / 3b | `long sum_vector(const std::vector<int>&)` and `long sum_list(const Node*)` | 2 |
-| 4 | nothing to code — report the build, the method and your machine | 2 |
+| 1a / 1b | `void swap_ref(int&, int&)` and `void swap_ptr(int*, int*)` | 1 |
+| 2a / 2b | `double sum_by_value(Big)` and `double sum_by_cref(const Big&)` | 1.5 |
+| 3a / 3b | `long sum_vector(const std::vector<int>&)` and `long sum_list(const Node*)` | 1.5 |
+| 4 | nothing to code — report the build, the method and your machine | 1 |
 
 Everything else (the percentile harness, the data setup, the shuffled list, the
 four tables) is written for you. Read the harness — you are expected to be able
@@ -58,7 +60,7 @@ arithmetic you are no longer measuring the copy.
 
 A short `README.md` or PDF alongside your `hw2.cpp`. It needs:
 
-### 1. Your machine and build (2 pts live here)
+### 1. Your machine and build (1 pt lives here)
 
 State all of it — a benchmark without a machine is not a result:
 
@@ -74,7 +76,7 @@ State all of it — a benchmark without a machine is not a result:
 Paste the program's own output, or retype it. Table 2 and Table 3 must show
 **p50, p99 and p99.9** — a mean alone is not a distribution and loses a point.
 
-### 3. Explanation A — `swap_ref` vs `swap_ptr` (part of the 3 pts)
+### 3. Explanation A — `swap_ref` vs `swap_ptr` (part of the 1 pt)
 
 A short paragraph. Cover, in your own words:
 
@@ -86,7 +88,7 @@ A short paragraph. Cover, in your own words:
   check (either choice is fine; say which and why)
 - Which one you would use in an HFT hot path and why
 
-### 4. Explanation B — contiguous vs pointer chasing (part of the 2 pts)
+### 4. Explanation B — contiguous vs pointer chasing (part of the 1.5 pts)
 
 Same amount of arithmetic, same number of `int`s summed, very different time.
 Explain *why*, in terms of the Session 2 memory hierarchy:
@@ -96,7 +98,7 @@ Explain *why*, in terms of the Session 2 memory hierarchy:
 - the hardware prefetcher: why it helps the vector and cannot help the chase
 - the dependent-load chain: each `p->next` must complete before the next hop
   can even start, so misses serialise instead of overlapping
-- where this shows up in our course: it is the reason the order book (Session 6, HW 6) is
+- where this shows up in our course: it is the reason the order book (Session 5, HW 5) is
   a flat array and not a `map` of nodes
 
 Also say something about the **copy** result: is the by-value overhead roughly
@@ -107,18 +109,47 @@ or not? Order-of-magnitude reasoning is enough.
 
 ## Submission checklist (this is the rubric)
 
-- [ ] **(3)** `swap_ref` and `swap_ptr` both print `OK` in Table 1, and the
+**Part A — pointers and the cost of a copy (5 pts)**
+
+- [ ] **(1)** `swap_ref` and `swap_ptr` both print `OK` in Table 1, and the
       difference between references and pointers is explained in prose.
-- [ ] **(3)** `sum_by_value` vs `sum_by_cref` benchmarked, both correctness-checked
+- [ ] **(1.5)** `sum_by_value` vs `sum_by_cref` benchmarked, both correctness-checked
       as equal and non-zero, with the p50/p99/p99.9 table and the ratio.
-- [ ] **(2)** Contiguous vs pointer-chasing traversal of the **same** 1,048,576
+- [ ] **(1.5)** Contiguous vs pointer-chasing traversal of the **same** 1,048,576
       elements, measured, with the cache explanation.
-- [ ] **(2)** Every timing from an `-O2` (or `-O3`) build, with warm-up,
+- [ ] **(1)** Every timing from an `-O2` (or `-O3`) build, with warm-up,
       percentiles reported, and your machine + compiler + flags stated.
-- [ ] `hw2.cpp` and the write-up attached to Canvas (`.cpp` + `.md`/`.pdf`,
+
+**Part B — classes, the Rule of Five & RAII (5 pts)** — Session 2 material only:
+no `virtual`, no smart pointers. Each task starts from a lab file
+(`labs/session02.md`, steps 9–13); keep every program ASan-clean (`-O0 -g
+-fsanitize=address`), and time with `-O2`.
+
+- [ ] **(1.5) Rule of Three — `PriceBuffer`** (from the lab's `pxbuf.cpp`): rename
+      to `PriceBuffer`; `const`-correct accessors and an invariant in the
+      constructor; deep copy, self-assignment safe, no leak, no double free.
+- [ ] **(1.5) Rule of Five** (from `growth.cpp`): `noexcept` moves that leave the
+      source empty. Count copies and moves for 1,000 `push_back`s without
+      `reserve()`, with and without `noexcept`, and explain the difference. Then
+      time copying vs moving a 1 MB buffer (p50/p99, `-O2`, machine stated).
+- [ ] **(1) RAII guard** (from `raii.cpp`): a non-copyable `ScopedTimer` that writes
+      the elapsed nanoseconds into a caller-supplied slot, on normal exit and when
+      an exception leaves the scope.
+- [ ] **(1) Inheritance, no `virtual`** (from `order_of.cpp`, `layout.cpp`,
+      `inherit.cpp`): `Instrument` with `Equity` and `Future` derived from it; print
+      the construction/destruction order for a `Future` holding a `PriceBuffer`
+      member, `sizeof` each type and explain the padding, show slicing, and say
+      which derived classes follow the Rule of Zero and why that is enough.
+- [ ] *Not graded (midterm practice):* rewrite `PxBuf` with a member
+      `std::vector<double>` and say which of the five special members you could
+      delete (the Rule of Zero).
+
+**Submission**
+
+- [ ] `hw2.cpp`, your Part B source files and the write-up attached to Canvas (`.cpp` + `.md`/`.pdf`,
       or a `.zip`, or a link to your repo — a repo link still needs the write-up).
 
-**Not graded:** false sharing. We do it in the Session 2 lab (`labs/session02.md`, step 6); it is not on this
+**Not graded:** false sharing. We do it in the Session 2 lab (`labs/session02.md`, Part A step 6); it is not on this
 task list.
 
 ---

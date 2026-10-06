@@ -1,6 +1,6 @@
-// handoff.cpp — Session 7 lab, step 3. Publish a payload with release/acquire.
-//   g++ -std=c++17 -O2 -pthread starters/session07/handoff.cpp -o /tmp/handoff && /tmp/handoff
-//   g++ -std=c++17 -O1 -g -pthread -fsanitize=thread starters/session07/handoff.cpp -o /tmp/handoff_tsan
+// handoff.cpp — Session 6 lab, step 3. Publish a payload with release/acquire.
+//   g++ -std=c++17 -O2 -pthread starters/session06/handoff.cpp -o /tmp/handoff && /tmp/handoff
+//   g++ -std=c++17 -O1 -g -pthread -fsanitize=thread starters/session06/handoff.cpp -o /tmp/handoff_tsan
 // Rebuild with -DBROKEN (both orders become relaxed) and run the TSan build again.
 #include <atomic>
 #include <cstdio>

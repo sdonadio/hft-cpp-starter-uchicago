@@ -1,4 +1,4 @@
-// stale_quote.cpp — HW 9 "Cross-venue stale-quote detector" (Session 9).
+// stale_quote.cpp — HW 8 "Cross-venue stale-quote detector" (Session 8).
 //
 // Two venues quote the same symbol. When their tops of book CROSS (one venue's
 // bid above the other's ask), one of the two quotes is stale: the one that was
@@ -19,7 +19,7 @@
 //     |position + signed qty| <= limit. qty <= 0 -> no order.
 //   * No allocation, no I/O: this runs inside on_book.
 //
-// Build:  g++ -std=c++20 -O2 starters/session09/stale_quote.cpp -o /tmp/stale && /tmp/stale
+// Build:  g++ -std=c++20 -O2 starters/session08/stale_quote.cpp -o /tmp/stale && /tmp/stale
 // Then:   write README.md — what latency this needs to be real, and what makes the
 //         signal FALSE (adverse selection). That discussion carries the marks.
 
@@ -39,7 +39,7 @@ struct Order {
     double px    = 0;
 };
 
-// TODO(HW 9): implement the contract above.
+// TODO(HW 8): implement the contract above.
 Order detect_stale(const Top v[2], double fee_bps, int position, int limit) {
     (void)v; (void)fee_bps; (void)position; (void)limit;
     return {};                      // placeholder: never fires

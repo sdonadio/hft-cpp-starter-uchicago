@@ -1,4 +1,4 @@
-// u64toa_test.cpp — HW 8, part 2 (Session 8). Contract: u64toa.hpp defines
+// u64toa_test.cpp — HW 7, part 2 (Session 7). Contract: u64toa.hpp defines
 //   int u64toa(uint64_t v, char* out);   // writes decimal digits, returns length
 #include <cstdint>
 #include <cstring>

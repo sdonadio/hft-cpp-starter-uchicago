@@ -1,7 +1,7 @@
-// dispatch_bench.cpp — Session 4 lab: what does a virtual call really cost?
+// dispatch_bench.cpp — Session 3 lab: what does a virtual call really cost?
 //
 // Build (from the repo root):
-//   c++ -std=c++20 -O2 -Itests starters/session04/dispatch_bench.cpp -o /tmp/dispatch && /tmp/dispatch
+//   c++ -std=c++20 -O2 -Itests starters/session03/dispatch_bench.cpp -o /tmp/dispatch && /tmp/dispatch
 //   (or: make dispatch)
 //
 // Every case does the same arithmetic — one tiny "signal" per call — and only
@@ -155,7 +155,7 @@ int main() {
     measure("std::function",
             [](const Set& st, std::size_t j, long x) { return st.sfn[j](x); });
 
-    // TODO(Session 5 lab): add a CRTP row here — Strategy<Derived> calling
+    // TODO(Session 4 lab): add a CRTP row here — Strategy<Derived> calling
     // static_cast<const Derived*>(this)->f_impl(x) — and compare it with the
     // first two rows. (Which pattern can CRTP serve: mono, mixed, or both?)
 

@@ -1,6 +1,6 @@
-// bench_alloc.cpp — Session 6 lab: new/delete vs YOUR Pool (include/pool.hpp).
+// bench_alloc.cpp — Session 5 lab: new/delete vs YOUR Pool (include/pool.hpp).
 // Build:  make bench-alloc      (or: g++ -std=c++17 -O2 -Iinclude -Itests \
-//                                  starters/session06/bench_alloc.cpp -o /tmp/bench_alloc)
+//                                  starters/session05/bench_alloc.cpp -o /tmp/bench_alloc)
 // Prints the mean ns per alloc+free pair AND the per-op tail (p50 / p99 / p99.9 / max)
 // for the same workload: a live set of 256 orders, one alloc + one free per step,
 // in a scrambled order so the heap cannot just hand back the last block.
