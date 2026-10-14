@@ -6,7 +6,8 @@
 > **File names.** This lab was `labs/session05.md` before the Oct 14 re-schedule (Session 5
 > is now the midterm). The comments in `include/pool.hpp`, `include/order_book.hpp`,
 > `tests/pool_test.cpp`, `tests/book_test.cpp` and the `Makefile` still say "Session 5" /
-> `labs/session05.md`: they mean this lab. The two Part C drivers live in
+> `labs/session05.md`: they mean this lab (the band warning that `order_book.hpp` calls
+> "step B2" is now **B6**). The two Part C drivers live in
 > `starters/session05/` (the folder kept its name when the schedule moved, because the
 > Makefile builds it); the new Part B benchmark is `starters/session06/bench_containers.cpp`.
 
