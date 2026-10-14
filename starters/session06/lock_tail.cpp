@@ -1,4 +1,4 @@
-// lock_tail.cpp — Session 6 lab, step 4. Same work, three ways, under contention:
+// lock_tail.cpp — Session 7 lab (labs/session07.md), A5. Same work, three ways, under contention:
 // a std::mutex, a std::atomic fetch_add, and no sharing at all. Prints the mean
 // AND the tail of the time per increment, measured in batches of 64 (a laptop
 // clock cannot time one 5 ns operation).

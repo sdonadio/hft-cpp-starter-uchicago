@@ -1,4 +1,4 @@
-// risk_bench.cpp — Session 9 lab, step 7: what does YOUR risk gate cost?
+// risk_bench.cpp — Session 9 lab (labs/session09.md), optional Part D, D6: what does YOUR risk gate cost?
 //
 //   make risk-bench        (= g++ -std=c++17 -O2 -pthread -Iinclude -Itests ...)
 //
@@ -9,7 +9,7 @@
 //            a std::mutex, a double-precision collar
 //   yours  — include/risk_gate.hpp (check + on_done)
 // A laptop clock can't time one ~5 ns call, so each sample is a batch of 64
-// calls divided by 64 (the same trick as Session 6's lock_tail.cpp). The tail
+// calls divided by 64 (the same trick as the Session 7 lab's lock_tail.cpp). The tail
 // percentiles are therefore per-batch averages: a single slow call is diluted
 // 64x. Say so when you report them.
 #include <algorithm>

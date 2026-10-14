@@ -1,70 +1,295 @@
-# Session 9 Lab — A Pre-Trade Risk Gate
+# Session 9 Lab — Profile, Fix, Race (+ optional: a pre-trade risk gate)
 
-**FINM 32700 · Session 9 · Mon Nov 30** · in class, in breakout pairs (~45 min) + a take-home tail
-**Repo:** your copy of the starter · **Deck:** Session 9 — *Pre-Trade Risk & Controls*
-**Feeds:** HW 9 — *A pre-trade risk gate* (10 pts, team work, due **Thu Dec 10, 10:59 pm CT**)
+**FINM 32700 · Session 9 · Mon Nov 30** · in class, in pairs (~30 min) + the tournament + a take-home tail
+**Repo:** your copy of the starter · **Deck:** Session 9 — *The Tail & the Tournament* (with a short pre-trade risk part)
+**Feeds:** Project Phase 6 — *Profile & Kill the Tail* (due **Fri Dec 4, 10:59 pm CT**) ·
+HW 8 — *Cross-venue stale-quote detector* (proposed due **Thu Dec 10, 10:59 pm CT**, moving
+from Dec 3 — check Canvas for the date that counts) ·
+Project Phase 7 — *The Tournament* (due **Fri Dec 11, 10:59 pm CT**)
+**Previous session:** Session 8, the wire & the machine (`labs/session08.md`). This is the
+last session: the **final exam** is Dec 8–11 (remote, no session).
+**Optional, ungraded:** Part D, the pre-trade risk gate (HW 9 is dropped).
+
+> The HW 8 harness lives in `starters/session08/`: the folder kept its name when the
+> schedule moved (this lab was `labs/session08.md` before the Oct 14 re-schedule). The
+> optional Part D uses `starters/session09/risk_bench.cpp`. The comments in
+> `include/risk_gate.hpp` and `tests/risk_gate_test.cpp` still call it "HW 9 (Session 9)";
+> HW 9 is now optional and ungraded.
 
 ## Goal
 
-Build `include/risk_gate.hpp`: the last piece of code every order passes before it
-is serialized and sent. It answers one question per order, *may this go out?*, and
-returns a reason code when the answer is no. It must:
+Find a latency tail with a profiler, fix it without changing what the program
+computes, and prove it with a before/after table. Then start the HW 8 detector
+on a test table, and walk into the tournament with a build that works from a fresh
+clone. You leave with one before/after table, one clean sanitizer run, a detector
+that passes its first cases, and a pre-flight checklist done.
 
-1. refuse fat-finger orders (size, notional) and prices outside a **collar** around
-   a reference price;
-2. track **position and open orders** per symbol, and refuse anything whose
-   *worst case* would break the position limit;
-3. refuse orders that would **cross your own** resting orders, and **duplicates**;
-4. meter order **and** cancel messages with a **token bucket**;
-5. hold a **kill switch** (`std::atomic<bool>`) that any thread can pull, that
-   blocks new orders but never cancels, and that trips itself on the conditions
-   below;
-6. do all of it in **O(1)**, with **no allocation, no locks and no clock reads**,
-   in a few nanoseconds, measured.
-
-You leave with seven green CI rows, a measured ns/check, and a plan for wiring the
-gate into your bot.
-
-| Step | What | Minutes |
+| Part | What | When |
 |---|---|---|
-| 0 | `make risk`: seven red rows; read the contract | 2 |
-| 1 | Size, notional, sanity, collar | 8 |
-| 2 | Position with open orders: `check`, `on_fill`, `on_done` | 10 |
-| 3 | Self-cross and duplicate | 7 |
-| 4 | Token bucket, `check_cancel` | 8 |
-| 5 | Kill switch: atomic flag, auto-trips | 5 |
-| 6 | `make risk-bench`: your ns/check vs a naive gate | 5 |
-| — | Your turn: wire it in, fuzz it, measure it in the bot | take-home (HW 9) |
+| A0 | Build and run `tail.cpp` three times | in class, 3 min |
+| A1 | Form a hypothesis from the code | 4 min |
+| A2 | Profile it (Linux `perf` / macOS fallback) | 8 min |
+| A3 | Fix it in a copy: `tail_fixed.cpp` | 10 min |
+| A4 | Sanitizers on the fixed copy | 3 min |
+| A5 | PGO + LTO on `kernel.cpp` (if time) | 2 min |
+| B | HW 8: the stale-quote detector | take-home (start in class if you finish A) |
+| C | Tournament pre-flight | before Part 3 of the session |
+| D | *Optional, ungraded:* a pre-trade risk gate (`include/risk_gate.hpp`, `make risk`, `make risk-bench`) | take-home, if you want it |
 
-**Checkpoint at 2:33:** post in the Zoom chat your seven CI rows (how many green) and
-the `yours` line from `make risk-bench`, plus your machine.
+**Checkpoint at 1:18:** post in the Zoom chat your `tail` vs `tail_fixed` line (p50,
+p99.9, max, and the `sink`, which must match) plus your machine.
 
-## Setup
+## A0. Build and run the tail (3 min)
 
 ```bash
-cd hft-cpp-starter-uchicago
-git pull                       # include/risk_gate.hpp, tests/risk_gate_test.cpp,
-                               # starters/session09/risk_bench.cpp, make risk / risk-bench
-make risk
-```
-The flags are the CI's: `g++ -std=c++17 -O2 -pthread -Iinclude -Itests`. Everything
-below also compiles with `-std=c++20`. The stub compiles and fails every row:
-
-```
-RESULT|risk_size|fail|501 shares: got Ok, want MaxQty
-RESULT|risk_collar|fail|no reference yet: got Ok, want NoReference
-RESULT|risk_position|fail|open buy after accept: got 0, want 600
-RESULT|risk_selfcross|fail|buy at our own ask: got Ok, want SelfCross
-RESULT|risk_throttle|fail|a burst of 10 at one instant: got 10, want 6
-RESULT|risk_dup|fail|same order 1 ms later: got Ok, want Duplicate
-RESULT|risk_kill|fail|kill() sets killed()
-METRIC|risk_ns_per_check|0.25
+sed -n '1,14p' starters/hw14/tail.cpp          # the brief: p50/p99/p99.9/max in ns
+g++ -O2 -std=c++17 starters/hw14/tail.cpp -o /tmp/tail
+for i in 1 2 3; do /tmp/tail; done
 ```
 
-## Step 0 — Read the contract (2 min)
+The flags are `-O2` on purpose: tonight we profile the *algorithm*, not a missing
+optimizer. Measured on an Apple M4 (Apple clang):
 
-Open `include/risk_gate.hpp`. The types are given and fixed by the autograder:
+```
+p50=417ns  p99=792ns  p99.9=1333ns  max=31667ns  (sink=200998581.510)
+p50=417ns  p99=541ns  p99.9=584ns  max=15666ns  (sink=200998581.510)
+p50=417ns  p99=500ns  p99.9=584ns  max=37917ns  (sink=200998581.510)
+```
 
+`p50` doesn't move; `p99.9` and `max` jump between runs. That variance is the tell.
+On Linux with glibc's allocator the p99.9/p50 ratio is usually much larger than on
+macOS — **report what your machine prints, and say which machine it is.**
+
+## A1. A hypothesis from the code (4 min)
+
+Open `signal()`:
+
+```cpp
+std::vector<double> scratch;                 // (a) a fresh vector EVERY tick
+for (std::size_t k = lo; k <= i; ++k) scratch.push_back(prices[k]);
+double s = 0.0;
+for (double v : scratch) s += v;             // (b) O(window) re-sum every tick
+return s / scratch.size();
+```
+
+- **(a)** `malloc`/`free` plus `push_back` growth on the hot path. Usually the
+  allocator's fast path; occasionally a real refill. That is a tail.
+- **(b)** ~257 adds per tick when a rolling sum needs one add and one subtract: a
+  constant-factor drag on *every* tick, i.e. the median.
+
+Note the window: `lo = i - window` and the loop is `k <= i` **inclusive**, so once warm
+it averages **`window + 1` = 257 prices**, growing 1, 2, 3, ... at the start. Your fix
+must reproduce that exactly.
+
+## A2. Profile before you fix (8 min)
+
+**Linux:**
+
+```bash
+perf stat -d /tmp/tail                              # IPC, cache and branch misses
+perf record -g /tmp/tail && perf report --stdio | head -40
+perf script | stackcollapse-perf.pl | flamegraph.pl > /tmp/tail.svg
+```
+
+Look for allocator frames (`operator new`, `malloc`, `_int_malloc`, `free`, sometimes
+`mmap`) under a function that "just averages numbers." `flamegraph.pl` and
+`stackcollapse-perf.pl` come from `github.com/brendangregg/FlameGraph`; put both on
+your `PATH`. `flamegraph.pl` is the script; the `.svg` is what comes out.
+
+**macOS (no `perf`):** Instruments → *Time Profiler* and *Allocations* on `/tmp/tail`
+(`xcrun xctrace record --template 'Time Profiler' --launch -- /tmp/tail` from the
+command line), or count calls from the code: 2,000,000 ticks, one vector per tick,
+several reallocations per vector as it grows to 257. Either way, **attribute the time to
+the allocator and the re-sum before you change a line.**
+
+## A3. Fix it in a copy (10 min)
+
+```bash
+cp starters/hw14/tail.cpp starters/hw14/tail_fixed.cpp
+```
+
+In `tail_fixed.cpp`, replace `signal()` with a ring that is allocated **once** and a
+running sum:
+
+```cpp
+struct RollingMean {
+    std::vector<double> buf;          // sized ONCE, in the constructor
+    std::size_t cap, count = 0, head = 0;
+    double sum = 0.0;
+    explicit RollingMean(std::size_t n) : buf(n, 0.0), cap(n) {}
+    double push(double px) {
+        if (count == cap) sum -= buf[head];   // evict the oldest
+        else              ++count;
+        sum += px;                             // admit the newest
+        buf[head] = px;
+        head = (head + 1 == cap) ? 0 : head + 1;
+        return sum / static_cast<double>(count);
+    }
+};
+```
+
+In `main`, build it **before** the timed loop and call it inside:
+
+```cpp
+RollingMean roll(WINDOW + 1);                 // 257: matches the inclusive window
+// ... inside the timed loop, replacing the signal() call:
+sink += roll.push(prices[i]);
+```
+
+```bash
+g++ -O2 -std=c++17 starters/hw14/tail_fixed.cpp -o /tmp/tail_fixed
+for i in 1 2 3; do /tmp/tail_fixed; done
+```
+
+Measured on the same M4:
+
+```
+p50=0ns  p99=42ns  p99.9=42ns  max=9250ns  (sink=200998581.510)
+```
+
+- **`sink` is identical** to the last printed digit. If yours differs, you changed the
+  math. The usual cause is `RollingMean roll(WINDOW)` (256 prices, not 257).
+- **`0ns` and `42ns` are clock ticks, not measurements**: macOS `steady_clock` advances
+  in ~42 ns steps here, so the whole tick now fits under one step. On Linux you'll see
+  real single-digit to tens of ns.
+- **`max` is still microseconds** even though every tick now does identical O(1) work.
+  That's the OS (preemption, interrupts), not your code — the deck's jitter slide.
+  Report it; don't "fix" it with flags.
+
+The before/after table for Phase 6: p50, p99, p99.9 and max for both, three runs each,
+the same `sink`, and one line naming the cause.
+
+## A4. Sanitizers on the fixed copy (3 min)
+
+A hand-written ring is exactly where an off-by-one hides:
+
+```bash
+g++ -O1 -g -fsanitize=address,undefined -std=c++17 starters/hw14/tail_fixed.cpp -o /tmp/tail_asan
+/tmp/tail_asan; echo "exit=$?"
+```
+
+Clean means the normal output line and `exit=0` (slower, that's expected). Break it on
+purpose — `head = head + 1;` without the wrap — and read the `heap-buffer-overflow`
+report once. For your threaded pipeline, TSan is a **separate** build:
+`-fsanitize=thread`. Never ship a sanitizer build.
+
+## A5. PGO and LTO on the frozen kernel (2 min, if time)
+
+`starters/hw13/kernel.cpp` is still **do-not-modify**. Two builds for GCC:
+
+```bash
+g++ -O3 -march=native -fprofile-generate starters/hw13/kernel.cpp -o /tmp/gen && /tmp/gen
+g++ -O3 -march=native -fprofile-use      starters/hw13/kernel.cpp -o /tmp/pgo && /tmp/pgo
+```
+
+For clang / Apple clang the profile goes through `llvm-profdata`:
+
+```bash
+clang++ -O3 -march=native -fprofile-instr-generate starters/hw13/kernel.cpp -o /tmp/gen
+LLVM_PROFILE_FILE=/tmp/k.profraw /tmp/gen
+xcrun llvm-profdata merge -o /tmp/k.profdata /tmp/k.profraw     # Linux: llvm-profdata
+clang++ -O3 -march=native -fprofile-instr-use=/tmp/k.profdata starters/hw13/kernel.cpp -o /tmp/pgo && /tmp/pgo
+g++ -O3 -march=native -flto starters/hw13/kernel.cpp -o /tmp/lto && /tmp/lto
+```
+
+M4: `-O3` 149 ms → PGO 137 ms → LTO 139 ms, **same checksum** each time. One file, so
+LTO has little to work with; on your bot (many `.cpp` files) it has more. For the bot,
+one CMake build directory per flag set, `--fresh` (CMake ≥ 3.24), or the cache ignores
+your `-DCMAKE_CXX_FLAGS`.
+
+## B. HW 8 — the cross-venue stale-quote detector (take-home)
+
+`starters/session08/stale_quote.cpp` is the harness: the contract in the header
+comment, a `detect_stale()` stub, and a ten-row test table.
+
+```bash
+g++ -std=c++20 -O2 starters/session08/stale_quote.cpp -o /tmp/stale && /tmp/stale
+# ... 4/10 cases pass    <- the stub never fires, so only the "no order" rows pass
+```
+
+The contract, in one breath: a cross exists when one venue's bid is above the other's
+ask; the **older** of the two crossing quotes is the stale one; buy the stale ask or sell
+the stale bid **on the stale venue**; fire only if the cross survives **two taker
+fees** (`price × fee_bps × 1e-4` per leg); size is the stale quote's displayed size,
+**clipped so |position| never exceeds the limit**. No allocation — this runs inside
+`on_book`.
+
+Two rows are the deck's arithmetic: the 1-cent cross at 30 bps **must not fire**
+(net −0.59 a share); the $0.96 cross at 30 bps must. When all ten pass, write
+`README.md` with the part that carries the marks:
+
+1. **What latency would you need for this to be real?** Compare how long a stale quote
+   survives with your measured tick-to-trade (Part A, Phase 6).
+2. **What makes the signal false?** Adverse selection: the "stale" venue may be right and
+   the fresh one about to reverse; the stale quote may be a trap sized to be hit; your
+   timestamps may be the stale ones.
+3. **Stretch:** a resting order on the stale venue when the other venue moves — hold or
+   reprice? Use the queue-aware rule from the deck.
+
+HW 8 is hand-graded: source plus README. Add your own cases to the table.
+
+## C. Tournament pre-flight (before Part 3)
+
+From a **fresh clone** of your repo, not your working copy:
+
+```bash
+make client                    # hft/cpp_client -> hft/cpp_client/build/hft_bot (TLS on)
+make run                       # connects with TEAM_ID / ARENA_TOKEN from .env
+```
+
+Then confirm, in order:
+
+- [ ] Your team appears on the dashboard's LATENCY tab once the round opens.
+- [ ] Your bot counts its own messages per tick and stays under **6** (the finale
+      scenario's `order_quota`); rejects in your log mean you're over.
+- [ ] Any arb threshold includes the **30 bps** taker fee on *both* legs.
+- [ ] Nothing in `on_book` allocates, logs or blocks (Part A, applied to the bot).
+- [ ] Your cross-venue plan, if any, is **two processes** with one `EXCHANGE_URL` each
+      and a shared touch cache (your Phase 4 ring). `EXCHANGE_URLS` is Python-only.
+- [ ] Offline fallback works: if you can't connect, the replay gives a legitimate
+      Phase 7 number:
+      ```bash
+      python3 scripts/latency_replay.py --latest --cmd "hft/cpp_client/build/hft_bot --replay"
+      ```
+
+The finale scenario is `hft/scenarios/week10.json` in the arena repo: `order_quota` 6,
+`position_limit` 1200, `SHORT_LOCATE_CAP` 600, opening auction 15 ticks, closing 12,
+`LULD_BAND_PCT` 0.08, AAPL earnings at tick 250, the FPGA ("Gateway Silicon") IPO
+listing at 550, a market-wide econ print at 850, NVDA earnings at 1150. The shop is
+closed (`purchase_window: false`): nobody buys colocation.
+
+## D. Optional: a pre-trade risk gate (HW 9 is dropped: optional, ungraded)
+
+This was a full session before the Oct 14 re-schedule. **HW 9 — *A pre-trade risk gate*
+is dropped**: nothing here is graded or due. Do it if you want the last piece of a real
+trading stack, or before the tournament if your bot has ever sent an order it shouldn't
+have. (CI still prints the seven `Risk gate:` rows with their points, because
+`tests/run_ci.py` is frozen this term; they don't count toward your grade.)
+
+`include/risk_gate.hpp` is the last code every order passes before it is serialized and
+sent. It answers *may this go out?* and returns a reason code when the answer is no:
+fat-finger size and notional, a price **collar** around a reference, worst-case
+**position including open orders**, **self-cross** and **duplicate** orders, a **token
+bucket** on orders and cancels, and a **kill switch**, all in O(1) with no allocation, no
+locks and no clock reads.
+
+| Step | What |
+|---|---|
+| D0 | `make risk`: seven red rows; read the contract |
+| D1 | Size, notional, sanity, collar |
+| D2 | Position with open orders: `check`, `on_fill`, `on_done` |
+| D3 | Self-cross and duplicate |
+| D4 | Token bucket, `check_cancel` |
+| D5 | Kill switch: atomic flag, auto-trips |
+| D6 | `make risk-bench`: your ns/check vs a naive gate |
+| D7 | Wire it in, fuzz it, measure it in the bot |
+
+### D0. `make risk` and the contract
+```bash
+make risk          # tests/risk_gate_test.cpp against include/risk_gate.hpp: seven fail rows on the stub
+```
+The flags are the CI's: `g++ -std=c++17 -O2 -pthread -Iinclude -Itests` (everything below
+also compiles with `-std=c++20`). The types are fixed by the test:
 ```cpp
 enum class Side : uint8_t { Buy = 0, Sell = 1 };
 enum class Risk : uint8_t { Ok = 0, Killed, BadOrder, MaxQty, MaxNotional,
@@ -72,36 +297,20 @@ enum class Risk : uint8_t { Ok = 0, Killed, BadOrder, MaxQty, MaxNotional,
                             Duplicate, Throttled };
 struct Order { uint32_t sym; Side side; int32_t qty; int64_t px; uint64_t ts_ns; };
 ```
+- **Prices are integer ticks** (1 tick = $0.01): limits compare by multiplying, never
+  dividing, so no rounding and no floating point in a limit.
+- **Time comes in with the order** (`ts_ns`): the gate never calls a clock, and tests can
+  drive time exactly.
+- **`check()` is check-and-reserve:** `Ok` means *you will send this now*, so the order
+  counts as open at once. A refused order changes nothing.
+- **The enum order is the check order;** the first failure wins, and the kill switch
+  comes first because it must never be skipped.
 
-Three decisions are already made for you. Know why before you code:
-
-- **Prices are integer ticks** (1 tick = $0.01). Limits compare by multiplying,
-  never by dividing, so there's no rounding and no floating point in a limit.
-- **Time comes in with the order** (`ts_ns`). The gate never calls a clock: the caller
-  stamps the tick once, and tests can drive time exactly.
-- **`check()` is check-and-reserve.** `Ok` means *you will send this now*, so the
-  gate counts the order as open right away. A refused order changes nothing.
-
-**The order of the enum is the order of the checks.** The first failure wins. The
-kill switch is first because it is the one that must never be skipped.
-
-## Step 1 — Size, notional, sanity, collar (8 min)
-
-Keep the limits in a member (`RiskLimits lim_;`) and give each symbol one cache line:
-
-```cpp
-struct alignas(64) Sym {
-    int64_t  ref = 0, max_bid = 0, min_ask = 0, last_px = 0;
-    uint64_t last_ts = 0;
-    int32_t  pos = 0, open_buy = 0, open_sell = 0, last_qty = 0;
-    Side     last_side = Side::Buy;
-};
-Sym s_[kMaxSymbols]{};
-```
-
-`set_reference(sym, px)` stores `px` in `s_[sym].ref` (ignore `sym >= kMaxSymbols`).
-Then the top of `check()`:
-
+### D1. Size, notional, sanity, collar
+Keep the limits in a member (`RiskLimits lim_;`) and give each symbol one cache line
+(`struct alignas(64) Sym { int64_t ref, max_bid, min_ask, last_px; uint64_t last_ts;
+int32_t pos, open_buy, open_sell, last_qty; Side last_side; }; Sym s_[kMaxSymbols]{};`).
+`set_reference(sym, px)` stores `s_[sym].ref`. The top of `check()`:
 ```cpp
 if (o.qty <= 0 || o.px <= 0 || o.sym >= kMaxSymbols)  return Risk::BadOrder;
 if (o.qty > lim_.max_qty)                             return Risk::MaxQty;
@@ -111,191 +320,105 @@ if (s.ref <= 0)                                       return Risk::NoReference;
 if (std::llabs(o.px - s.ref) * 10000 > int64_t(lim_.collar_bps) * s.ref)
                                                       return Risk::PriceCollar;
 ```
+Widen **before** multiplying (500 shares × 5,000,000 ticks overflows `int32_t`), and the
+edge is allowed: with a reference of 10,000 and 800 bps, 10,800 passes and 10,801 doesn't.
 
-Two traps:
-- `o.qty * o.px` in `int32_t` overflows for 500 shares at $50,000 = 5,000,000 ticks.
-  Widen **before** multiplying.
-- **The edge is allowed.** With a reference of 10,000 and 800 bps, 10,800 passes and
-  10,801 doesn't. Use `>`, not `>=`.
-
-Run `make risk`: `risk_size` and `risk_collar` go green. (Once you add Step 3's
-self-cross check, `risk_collar` also relies on Step 2's `on_done`: it rests a buy,
-releases it, then sends a sell below it.)
-
-## Step 2 — Position with open orders (10 min)
-
-The venue counts every resting order as if it will fill (`exchange/server.py`,
-the `POSITION_LIMIT` check: team position + same-side open + this order). Your gate
-must count the same way, or it lets through exactly the orders the venue refuses.
-
+### D2. Position with open orders
+The venue counts every resting order as if it will fill (team position + same-side open +
+this order), so the gate must too:
 ```cpp
 const bool buy = o.side == Side::Buy;
 const int64_t worst = buy ? int64_t(s.pos) + s.open_buy  + o.qty
                           : int64_t(s.pos) - s.open_sell - o.qty;
 if (std::llabs(worst) > lim_.max_position)            return Risk::Position;
 ```
+When every check has passed, **reserve** `o.qty` on its side. Write `on_fill` and
+`on_done` yourself: both release open quantity, never below zero (a cancel can race a
+fill); `on_fill` also moves the position, and if a fill takes `|pos|` past
+`max_position`, something sent an order the gate never approved: **fail closed** with
+`kill()`.
 
-When every check has passed, **reserve**: add `o.qty` to `open_buy` or `open_sell`.
+### D3. Self-cross and duplicate
+Keep a conservative bound per symbol: the highest resting bid (`max_bid`) and lowest
+resting ask (`min_ask`), valid while that side has open quantity. A **buy** with
+`open_sell > 0 && px >= min_ask`, or a **sell** with `open_buy > 0 && px <= max_bid`, is
+a `SelfCross` (the arena's self-trade prevention would cancel your resting order and still
+count the message). The bound may refuse a legal order; it never lets a self-cross
+through. **Duplicate:** the same side, qty and px as the last accepted order on that
+symbol, less than `dup_window_ns` later (`0` turns it off).
 
-**Write `on_fill` and `on_done` yourself.** Both release open quantity on their side,
-never below zero (a cancel can race a fill, so you may be told twice). `on_fill`
-also moves the position. The test walks through:
-buy 600 rests → buy 500 refused (600 + 500 > 1000) → buy 400 accepted (exactly
-1000) → 600 fill → buy 1 refused (600 + 400 + 1) → the 400 is cancelled → buy 400
-accepted.
+### D4. The token bucket
+The arena meters orders **and** cancels (`order_quota` per second, 3× burst). `tokens_`
+starts at `burst`; each call refills `(ts - last) * 1e-9 * msgs_per_sec`, capped at
+`burst`, and a message needs one whole token. Write `take_token(ts)` and put it **last**
+in `check()`, so a refused order never spends a token; `check_cancel(ts)` is
+`take_token(ts) ? Ok : Throttled`. In your bot, set `msgs_per_sec` below the venue's quota.
 
-One more rule, for Step 5: if a fill takes `|pos|` past `max_position`, something sent
-an order your gate never approved. **Fail closed:** call `kill()`.
-
-## Step 3 — Self-cross and duplicate (7 min)
-
-**Self-trade prevention.** The arena cancels *your resting order* when you trade with
-yourself (team-scoped STP in `shared/orderbook.py`). You lose the queue spot, and
-the venue still counts the message. Refuse it in the gate instead.
-
-You don't track individual orders, so keep a **conservative bound** per symbol: the
-highest price among your resting bids (`max_bid`) and the lowest among your resting
-asks (`min_ask`), valid only while that side has open quantity. On an accepted
-buy, `max_bid = (open_buy == 0) ? px : max(max_bid, px)` *before* you add the qty;
-mirror it for sells. Then:
-
-- a **buy** with `open_sell > 0 && px >= min_ask` → `SelfCross`
-- a **sell** with `open_buy > 0 && px <= max_bid` → `SelfCross`
-
-When a side's open quantity returns to zero, its bound stops mattering. The bound
-may refuse a legal order (your best ask was cancelled but an older one is still
-there). It never lets a self-cross through. Say that trade-off in your README.
-
-**Duplicate.** Remember the last *accepted* order per symbol (side, qty, px, ts). A
-new order with the same side, qty and px less than `dup_window_ns` later is a
-`Duplicate`. `dup_window_ns == 0` turns the check off. Different qty, other side,
-other symbol, or 50 ms later: all fine.
-
-## Step 4 — The token bucket (8 min)
-
-The arena meters order **and** cancel messages: `order_quota` per 1-second tick with
-a 3× burst (`exchange/limits.py`), and over quota the venue answers `RATE_LIMITED`.
-Your bucket runs in front of it, in nanoseconds:
-
-- `tokens_` starts at `burst` (in the constructor);
-- on each call, refill `(ts - last) * 1e-9 * msgs_per_sec`, cap at `burst`, and
-  remember `ts` (only when it moved forward);
-- a message needs one whole token.
-
-**Write `take_token(uint64_t ts)` yourself** (the deck's slide 12 shows the shape).
-Put it **last** in `check()`: an order refused for any other reason must not spend a
-token. `check_cancel(ts)` is just `take_token(ts) ? Ok : Throttled`.
-
-The test fires 10 orders at one instant (6 pass), checks a cancel is throttled,
-waits 100 ms (0.6 token: refused) and 200 ms (1.2: accepted), then sends a
-collar-violating order 5 s later and checks that it **did not** use a token.
-
-In your bot, set `msgs_per_sec` **below** the venue's quota (say 80%), and leave
-room for the cancels the kill switch will need.
-
-## Step 5 — The kill switch (5 min)
-
+### D5. The kill switch
 ```cpp
 std::atomic<bool> killed_{false};
 void kill()          { killed_.store(true, std::memory_order_relaxed); }
 bool killed() const  { return killed_.load(std::memory_order_relaxed); }
 ```
-
-Why `relaxed` is enough: the flag publishes no other data (Session 6). The hot
-thread only needs to *eventually* see `true`, and on x86 and ARM the load is a plain
-load of a line nobody else is writing.
-
-- First line of `check()`: `if (killed_.load(std::memory_order_relaxed)) return Risk::Killed;`
-- `check_cancel()` **ignores** the flag. Cancel-all is what the switch is for.
-- `on_venue_reject()` counts; the `max_venue_rejects`-th one since the last `reset()`
-  calls `kill()`. `0` disables it.
-- `reset()` re-arms: clears the flag **and** the reject count. In a real system only a
-  person calls it.
-
-The test also pulls the switch from a second `std::thread` and checks that the next
-`check()` returns `Killed`. (The test joins that thread first, so it can't catch a
-plain `bool`. Your bot can: a console or watchdog thread writing the flag while
-`on_book` reads it is a data race, which is undefined behaviour.)
-
+`relaxed` is enough because the flag publishes no other data (Session 7 lab, Part A4).
+First line of `check()`: `if (killed_.load(std::memory_order_relaxed)) return Risk::Killed;`.
+`check_cancel()` **ignores** the flag (cancel-all is what the switch is for);
+`on_venue_reject()` trips it on the `max_venue_rejects`-th reject; `reset()` clears the
+flag and the count.
 ```bash
 make risk          # seven pass rows
 g++ -std=c++17 -O1 -g -pthread -fsanitize=thread -Iinclude -Itests \
     tests/risk_gate_test.cpp -o /tmp/risk_tsan && /tmp/risk_tsan | grep -c pass   # 7, no warnings
 ```
 
-## Step 6 — What does it cost? (5 min)
-
+### D6. What does it cost?
 ```bash
-make risk-bench
+make risk-bench    # starters/session09/risk_bench.cpp
 ```
-`starters/session09/risk_bench.cpp` times three gates on one fixed stream of orders
-(64 symbols, about 1 in 16 outside the collar): **none** (the loop alone), **naive**
-(`std::string` symbol, `std::unordered_map`, a `std::mutex`, a `double` collar), and
-**yours**. A laptop clock can't time one 5 ns call, so each sample is a batch of 64
-calls divided by 64. The reference gate on an Apple M4 (Apple clang 21, `-O2`), three
-runs:
-
+It times three gates on one fixed order stream (64 symbols, about 1 in 16 outside the
+collar), each sample a batch of 64 calls: **none** (the loop alone), **naive**
+(`std::string` symbol, `std::unordered_map`, a `std::mutex`, a `double` collar) and
+**yours**. The reference gate on an Apple M4 (Apple clang 21, `-O2`):
 ```
 none   p50   0.64  p99   0.66  p99.9    0.66  max     28.64  ns/check
 naive  p50  25.39  p99  27.34  p99.9   32.56  max    242.84  ns/check
 yours  p50   5.20  p99   5.86  p99.9    6.52  max     41.02  ns/check
 ```
-Across runs, `yours` was 4.6–5.2 ns at p50 and 6.5 ns at p99.9; `naive` was 25–26 ns
-and 33–48 ns. The stub prints `0.00` for `yours` because it does nothing: a number
-that small means "you measured nothing", not "fast".
+The stub prints `0.00` for `yours` because it does nothing. The naive gate is only ~5×
+slower because its mutex is **uncontended**; put a monitor thread on it and its tail
+becomes the scheduler's (Session 7 lab, Part A5).
 
-Read it: the naive gate is about 5× slower and still only ~30 ns, because the mutex
-is **uncontended**. Put a monitor thread on that mutex and its tail becomes the
-scheduler's (Session 6, Part A5). And because each sample averages 64 calls, one
-slow call is diluted 64×. Say so when you report a p99.9.
-
-## Your turn (take-home, HW 9)
-
-1. **Wire it in.** In `hft/cpp_client/src/main.cpp`, give your bot a `RiskGate` and
-   send every order through `check()` and every cancel through `check_cancel()`. Let
-   CMake find the header:
-   ```cmake
-   target_include_directories(hft_bot PRIVATE
-     ${CMAKE_CURRENT_SOURCE_DIR}/include
-     ${CMAKE_CURRENT_SOURCE_DIR}/../../include)      # include/risk_gate.hpp
-   ```
-   Convert once per tick: dollars → ticks (`std::llround(px * 100)`), symbol →
-   id (your Session 5 `SymMap`), `steady_clock` → `ts_ns`. Feed the state: `on_fill`
-   → `gate.on_fill`; `on_error` → `gate.on_venue_reject()`; `SESSION_CLOSED` →
-   `kill()`, then cancel what rests. The deck's slide 25 has the skeleton.
-2. **Release on reject.** `on_error` carries no order id. Keep a small FIFO of
-   *sent, not yet acked* orders per symbol; `on_ack` pops one, `on_error` pops one and
-   calls `on_done`. Otherwise every venue reject leaks open quantity, and the gate
-   slowly locks you out of the symbol. Write down what you chose.
-3. **Fuzz it.** A property test (the deck's slide 23): a million random orders,
-   random fills, and after each step `|position| <= max_position`. Then pull the
-   switch at a random step and assert nothing is accepted after it.
-4. **Measure it in the bot.** Replay the same tape with the gate on and off:
-   ```bash
-   python3 scripts/latency_replay.py --latest --cmd "hft/cpp_client/build/hft_bot --replay"
-   ```
-   Report p50/p99.9 tick-to-trade for both, on the same machine.
-5. **Stretch (no extra points).** A gross-notional limit across symbols (keep the
-   sum incremental: update it on accept, fill and done, marked at the reference);
-   a runaway ratio (orders vs fills per second); a loss limit that pulls the switch.
+### D7. Wire it in, fuzz it, measure it in the bot
+1. Give your bot a `RiskGate`; send every order through `check()` and every cancel
+   through `check_cancel()` (add `${CMAKE_CURRENT_SOURCE_DIR}/../../include` to
+   `target_include_directories(hft_bot ...)`). Convert once per tick: dollars → ticks
+   (`std::llround(px * 100)`), symbol → id (your Session 6 `SymMap`), `steady_clock` →
+   `ts_ns`. `on_fill` → `gate.on_fill`; `on_error` → `gate.on_venue_reject()`;
+   `SESSION_CLOSED` → `kill()`, then cancel what rests.
+2. `on_error` carries no order id: keep a small FIFO of sent-not-acked orders per symbol
+   so a venue reject can call `on_done`, or open quantity leaks.
+3. Fuzz: a million random orders and fills, asserting `|position| <= max_position` after
+   each step; pull the switch at a random step and assert nothing is accepted after it.
+4. Replay the same tape with the gate on and off and compare p50/p99.9 tick-to-trade.
 
 ## Checkpoint
 
-- [ ] `make risk`: seven `pass` rows, and `make test` shows 85/85 on the seven risk lines
-- [ ] TSan build of `tests/risk_gate_test.cpp`: seven passes, no `ThreadSanitizer` line
-- [ ] `make risk-bench`: your `yours` line posted, with the machine
-- [ ] One sentence: why does the token bucket go **last** in `check()`?
-      (A refused order must not spend a message.)
-- [ ] One sentence: why may `check_cancel()` never look at the kill flag?
-      (Cancel-all is the kill switch's job.)
+- [ ] Before/after table: `tail` vs `tail_fixed`, three runs each, **same `sink`**
+- [ ] A profile (perf, a flame graph, or Instruments) that points at the allocator
+- [ ] `tail_fixed` clean under `-fsanitize=address,undefined`
+- [ ] You can explain why `max` stayed in microseconds after the fix
+- [ ] `/tmp/stale` passes 10/10 (by the HW 8 date: proposed Thu Dec 10, check Canvas) and the README answers both questions
+- [ ] Fresh-clone build connects, or the replay runs
+- [ ] *(Optional, Part D)* `make risk`: seven `pass` rows; your `yours` line from `make risk-bench`, with the machine
 
-## Links
+## Files
 
-- Edit: `include/risk_gate.hpp`
-- Contract (read-only): `tests/risk_gate_test.cpp`; how CI grades it: `tests/run_ci.py`
-- Benchmark: `starters/session09/risk_bench.cpp` (`make risk-bench`)
-- The venue's checks, for comparison: `exchange/server.py` (order validation),
-  `exchange/limits.py` (token bucket), `exchange/circuit_breaker.py` (halts), and the
-  finale's limits in `hft/scenarios/week10.json` (AlgoArena repo)
-- Client: `docs/HFT_CPP_CLIENT.md`, `hft/cpp_client/include/hft_bot.hpp`
-- Build: `make risk`, `make risk-bench`, full grade `make test`
+- Profile and fix: `starters/hw14/tail.cpp` → your `starters/hw14/tail_fixed.cpp`
+- Frozen kernel (flags only): `starters/hw13/kernel.cpp`
+- HW 8 harness: `starters/session08/stale_quote.cpp`
+- Client, `make client` / `make run`, replay: `docs/HFT_CPP_CLIENT.md`, `scripts/latency_replay.py`
+- Phase 6 and 7 checklist: `project/README.md`
+- Optional Part D: edit `include/risk_gate.hpp`; contract (read-only) `tests/risk_gate_test.cpp`;
+  benchmark `starters/session09/risk_bench.cpp`; build `make risk`, `make risk-bench`. The venue's
+  own checks, for comparison: `exchange/server.py`, `exchange/limits.py`,
+  `exchange/circuit_breaker.py` and `hft/scenarios/week10.json` (AlgoArena repo)

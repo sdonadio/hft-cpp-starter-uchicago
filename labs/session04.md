@@ -503,4 +503,5 @@ Nov 5, 10:59 pm CT); keep the before/after `tick_alloc` lines.
 
 ## Links
 Session 4 deck · HW 4 · Session 3 lab (`labs/session03.md`, `dispatch_bench.cpp`) ·
-Next: Session 5 lab (`labs/session05.md`).
+Next: Session 5 is the midterm, no lab (`labs/session05.md`); then the Session 6 lab,
+memory pools & the order book (`labs/session06.md`).

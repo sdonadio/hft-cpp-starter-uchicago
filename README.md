@@ -34,17 +34,25 @@ make test          # = python3 tests/run_ci.py  (grades whatever you've implemen
 | HW | Session | File to implement | What it checks |
 |----|---------|-------------------|----------------|
 | 2  | 2 | `starters/hw02/hw2.cpp` (+ your Part B class files) | pointers/references, copy cost, pointer chasing; classes, Rule of Five, RAII (graded by hand) |
-| 5  | 5 | `include/pool.hpp` | O(1) pool alloc/free, placement new, ns/alloc |
-| 5  | 5 | `include/order_book.hpp` | flat book best bid/ask + cancel; symbol map; ns/op |
-| 6  | 6 | `include/spsc_ring.hpp` | SPSC lock-free ring + ThreadSanitizer |
-| 7  | 7 | `include/fix_parser.hpp` | single-pass FIX NewOrder parse; ns/op |
-| 7  | 7 | `include/u64toa.hpp` | fast uint64→decimal; ns/op vs std |
-| 9  | 9 | `include/risk_gate.hpp` | pre-trade risk gate: limits, kill switch, throttle, self-trade prevention (HW 9) |
+| 5  | 6 | `include/pool.hpp` | O(1) pool alloc/free, placement new, ns/alloc |
+| 5  | 6 | `include/order_book.hpp` | flat book best bid/ask + cancel; symbol map; ns/op |
+| 6  | 7 | `include/spsc_ring.hpp` | SPSC lock-free ring + ThreadSanitizer |
+| 7  | 8 | `include/fix_parser.hpp` | single-pass FIX NewOrder parse; ns/op |
+| 7  | 8 | `include/u64toa.hpp` | fast uint64→decimal; ns/op vs std |
+| 8  | 9 | `starters/session08/stale_quote.cpp` | cross-venue stale-quote detector (graded by hand; proposed due Thu Dec 10, moving from Dec 3 — check Canvas) |
+| 9  | 9 | `include/risk_gate.hpp` | **dropped: optional, ungraded.** Pre-trade risk gate (limits, kill switch, throttle, self-trade prevention); CI still prints its rows |
+
+Session 5 (Mon Oct 26) is the midterm (remote, Sessions 1–4) and has no lab; the
+pools & order-book lab is `labs/session06.md`. Some file comments in `include/`,
+`tests/` and the `Makefile` still use the old session numbers (e.g. "Session 5" for
+the pool and book); the labs are the reference. Starter folders kept their names when
+the schedule moved, so a lab may use another session's `starters/` folder.
 
 HW 1, 2, 3, 4 and 8 have no autograder: you submit source and a write-up on
 Canvas. `starters/hw13` and `starters/hw14` (build flags, latency tail) are lab
-material for Sessions 7–8, not graded homework. `include/rolling_counter.hpp`
-is an optional Session 5 exercise: CI reports its rows, but they are not graded.
+material for Sessions 8–9, not graded homework. `include/rolling_counter.hpp`
+is an optional Session 6 exercise: CI reports its rows, but they are not graded.
+Neither are the `Risk gate:` rows now that HW 9 is dropped.
 HW 2 onward is team work with your project group (one submission per group).
 
 Each stub compiles but fails its tests until you implement it — that's your

@@ -282,7 +282,7 @@ is a *dependent* load (you cannot start loading node *k+1* until node *k* has
 arrived), and each 16-byte node carries 4 useful bytes. **Shuffle** the links and
 every hop is a likely miss the prefetcher cannot guess: ~300×. The column-major
 walk strides 32 KB between reads, so it uses 8 bytes of every cache line it
-fetches. This is why an order book is a flat array (Session 5), not a `std::map`
+fetches. This is why an order book is a flat array (Session 6), not a `std::map`
 of nodes.
 
 ## 5. Memory bugs under a sanitizer (10 min)
@@ -430,7 +430,7 @@ Measured on an Apple M4: `shared≈312–400 ms  padded≈80 ms` — about 4×, 
 identical atomic work. The two counters are different variables, but a cache
 line is the unit of coherence: each write invalidates the other core's copy.
 (Apple M-series reports a 128-byte line, `sysctl hw.cachelinesize`, yet 64-byte
-padding already removed the effect here — measure, don't assume.) Session 6's
+padding already removed the effect here — measure, don't assume.) Session 7's
 SPSC ring puts `alignas(64)` on its head and tail for exactly this reason.
 
 

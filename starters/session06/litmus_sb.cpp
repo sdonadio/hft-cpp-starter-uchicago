@@ -1,4 +1,4 @@
-// litmus_sb.cpp — Session 6 lab, step 3b. The store-buffering litmus test:
+// litmus_sb.cpp — Session 7 lab (labs/session07.md), B3. The store-buffering litmus test:
 //   thread A: x = 1; r1 = y;        thread B: y = 1; r2 = x;
 // Can BOTH threads read 0? The C++ model says: with relaxed OR release/acquire
 // atomics, yes; with seq_cst on all four operations, never.

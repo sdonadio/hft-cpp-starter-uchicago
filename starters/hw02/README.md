@@ -98,7 +98,7 @@ Explain *why*, in terms of the Session 2 memory hierarchy:
 - the hardware prefetcher: why it helps the vector and cannot help the chase
 - the dependent-load chain: each `p->next` must complete before the next hop
   can even start, so misses serialise instead of overlapping
-- where this shows up in our course: it is the reason the order book (Session 5, HW 5) is
+- where this shows up in our course: it is the reason the order book (Session 6, HW 5) is
   a flat array and not a `map` of nodes
 
 Also say something about the **copy** result: is the by-value overhead roughly

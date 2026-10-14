@@ -1,265 +1,293 @@
-# Session 8 Lab — Profile, Fix, Race
+# Session 8 Lab — Parse, Serialize, Vectorize
 
-**FINM 32700 · Session 8 · Mon Nov 16** · in class, in pairs (~30 min) + the tournament + a take-home tail
-**Repo:** your copy of the starter · **Deck:** Session 8 — *The Tail & the Tournament*
-**Feeds:** Project Phase 6 — *Profile & Kill the Tail* (due **Fri Dec 4, 10:59 pm CT**) ·
-HW 8 — *Cross-venue stale-quote detector* (due **Thu Dec 3, 10:59 pm CT**) ·
-Project Phase 7 — *The Tournament* (due **Fri Dec 11, 10:59 pm CT**)
+**FINM 32700 · Session 8 · Mon Nov 16** · in class, in pairs (~45 min) + a take-home tail
+**Repo:** your copy of the starter · **Deck:** Session 8 — *The Wire & the Machine*
+**Feeds:** HW 7 — *Fast FIX parser + uint64→text* (due **Tue Dec 1, 10:59 pm CT** — the
+Tuesday after Thanksgiving week) · Project Phase 5 — *Wire & Hardware Tuning* (due **Tue Dec 1,
+10:59 pm CT**)
+**Previous session:** Session 7, concurrency (`labs/session07.md`). No class Mon Nov 23
+(Thanksgiving week). **Next session:** Session 9, the tail & the tournament
+(`labs/session09.md`), Mon Nov 30.
+
+> The frame demo lives in `starters/session07/`: the folder kept its name when the
+> schedule moved (this lab was `labs/session07.md` before the Oct 14 re-schedule). The
+> comments in `tests/fix_test.cpp` and `tests/u64toa_test.cpp` still say "Session 7";
+> they mean this lab.
 
 ## Goal
 
-Find a latency tail with a profiler, fix it without changing what the program
-computes, and prove it with a before/after table. Then start the HW 8 detector
-on a test table, and walk into the tournament with a build that works from a fresh
-clone. You leave with one before/after table, one clean sanitizer run, a detector
-that passes its first cases, and a pre-flight checklist done.
+Build the two hot-path codecs HW 7 grades — a **single-pass, zero-allocation FIX
+parser** and a **`uint64_t` → decimal text** routine that beats `std::to_string` —
+then run your parser behind a **non-blocking socket** that frames a FIX byte stream
+by BodyLength and rejects a bad checksum. Last, look at the machine: the same
+`kernel.cpp` at `-O0` and `-O3 -march=native`, and the compiler's own report of
+whether it vectorized. You leave with two green tests, two ns/op numbers, one
+framed stream, and one vectorization report.
 
-| Part | What | When |
+| Step | What | Minutes |
 |---|---|---|
-| A0 | Build and run `tail.cpp` three times | in class, 3 min |
-| A1 | Form a hypothesis from the code | 4 min |
-| A2 | Profile it (Linux `perf` / macOS fallback) | 8 min |
-| A3 | Fix it in a copy: `tail_fixed.cpp` | 10 min |
-| A4 | Sanitizers on the fixed copy | 3 min |
-| A5 | PGO + LTO on `kernel.cpp` (if time) | 2 min |
-| B | HW 8: the stale-quote detector | take-home (start in class if you finish A) |
-| C | Tournament pre-flight | before Part 3 of the session |
+| 0 | Setup: both targets RED | 2 |
+| 1 | The FIX parser (HW 7, part 1) | 15 |
+| 2 | `u64toa` (HW 7, part 2) | 10 |
+| 3 | Frame a FIX stream over a non-blocking socket | 10 |
+| 4 | The machine: `-O0` vs `-O3 -march=native`, the vectorization report | 8 |
+| 5 | *Take-home:* two-digit `u64toa`, AVX2 by hand, your bot on the replay | — |
 
-**Checkpoint at 1:18:** post in the Zoom chat your `tail` vs `tail_fixed` line (p50,
-p99.9, max, and the `sink`, which must match) plus your machine.
+**Checkpoint at 2:40:** post in the Zoom chat (a) your `fix_parse_ns_per_op`, (b) your
+`u64toa_ns_per_op` next to `std_to_string_ns_per_op`, (c) the last line of `/tmp/frame`,
+and (d) your `-O0`/`-O3` `time_ms` pair — plus your machine (e.g. "M4 Pro, Apple clang 17").
 
-## A0. Build and run the tail (3 min)
+## 0. Setup (2 min)
+
+From the repo root:
 
 ```bash
-sed -n '1,14p' starters/hw14/tail.cpp          # the brief: p50/p99/p99.9/max in ns
-g++ -O2 -std=c++17 starters/hw14/tail.cpp -o /tmp/tail
-for i in 1 2 3; do /tmp/tail; done
+make fix       # builds tests/fix_test.cpp against include/fix_parser.hpp
+make u64toa    # builds tests/u64toa_test.cpp against include/u64toa.hpp
 ```
 
-The flags are `-O2` on purpose: tonight we profile the *algorithm*, not a missing
-optimizer. Measured on an Apple M4 (Apple clang):
+Both print `RESULT|...|fail` right now — the headers are stubs. Read the two contracts
+(`tests/fix_test.cpp`, `tests/u64toa_test.cpp`) before you write a line: the grader
+checks exactly those fields, edge cases and fuzz values.
+
+## 1. The FIX parser — HW 7, part 1 (15 min)
+
+The test message (SOH shown as `|`):
 
 ```
-p50=417ns  p99=792ns  p99.9=1333ns  max=31667ns  (sink=200998581.510)
-p50=417ns  p99=541ns  p99.9=584ns  max=15666ns  (sink=200998581.510)
-p50=417ns  p99=500ns  p99.9=584ns  max=37917ns  (sink=200998581.510)
+8=FIX.4.2 | 9=45 | 35=D | 11=ORD123 | 55=AAPL | 54=1 | 38=100 | 44=185.50 | 10=179 |
 ```
 
-`p50` doesn't move; `p99.9` and `max` jump between runs. That variance is the tell.
-On Linux with glibc's allocator the p99.9/p50 ratio is usually much larger than on
-macOS — **report what your machine prints, and say which machine it is.**
+`9=45` is the real BodyLength and `10=179` the real CheckSum of those bytes — step 3
+verifies both. The struct in `include/fix_parser.hpp` tells you the design:
+`clordid` is a **pointer + length into the caller's buffer** (a view, nothing copied),
+`symbol` a small fixed `char[16]`.
 
-## A1. A hypothesis from the code (4 min)
-
-Open `signal()`:
+**The mental model: one forward scan.** Read an integer tag, expect `=`, take the value
+up to the next SOH, `switch` on the tag, repeat. No `std::string`, no `std::map`, no
+allocation, no going back. Fill in `parse_new_order`:
 
 ```cpp
-std::vector<double> scratch;                 // (a) a fresh vector EVERY tick
-for (std::size_t k = lo; k <= i; ++k) scratch.push_back(prices[k]);
-double s = 0.0;
-for (double v : scratch) s += v;             // (b) O(window) re-sum every tick
-return s / scratch.size();
-```
+#pragma once
+#include <cstdint>
+#include <cstring>
+#include <cstdlib>
+// (keep the NewOrder struct exactly as shipped)
 
-- **(a)** `malloc`/`free` plus `push_back` growth on the hot path. Usually the
-  allocator's fast path; occasionally a real refill. That is a tail.
-- **(b)** ~257 adds per tick when a rolling sum needs one add and one subtract: a
-  constant-factor drag on *every* tick, i.e. the median.
+inline bool parse_new_order(const char* buf, int len, NewOrder& out) {
+    const char SOH = '\x01';
+    const char* p   = buf;
+    const char* end = buf + len;
+    bool id = false, sym = false, side = false, qty = false, px = false;
 
-Note the window: `lo = i - window` and the loop is `k <= i` **inclusive**, so once warm
-it averages **`window + 1` = 257 prices**, growing 1, 2, 3, ... at the start. Your fix
-must reproduce that exactly.
+    while (p < end) {
+        int tag = 0;                                   // tag: digits up to '='
+        while (p < end && *p != '=') {
+            if (*p < '0' || *p > '9') return false;    // malformed tag
+            tag = tag * 10 + (*p - '0');
+            ++p;
+        }
+        if (p >= end) return false;                    // no '=' -> malformed
+        ++p;                                           // consume '='
 
-## A2. Profile before you fix (8 min)
+        const char* v = p;                             // value: bytes up to SOH
+        while (p < end && *p != SOH) ++p;
+        const int vlen = static_cast<int>(p - v);
+        if (p < end) ++p;                              // consume SOH
 
-**Linux:**
-
-```bash
-perf stat -d /tmp/tail                              # IPC, cache and branch misses
-perf record -g /tmp/tail && perf report --stdio | head -40
-perf script | stackcollapse-perf.pl | flamegraph.pl > /tmp/tail.svg
-```
-
-Look for allocator frames (`operator new`, `malloc`, `_int_malloc`, `free`, sometimes
-`mmap`) under a function that "just averages numbers." `flamegraph.pl` and
-`stackcollapse-perf.pl` come from `github.com/brendangregg/FlameGraph`; put both on
-your `PATH`. `flamegraph.pl` is the script; the `.svg` is what comes out.
-
-**macOS (no `perf`):** Instruments → *Time Profiler* and *Allocations* on `/tmp/tail`
-(`xcrun xctrace record --template 'Time Profiler' --launch -- /tmp/tail` from the
-command line), or count calls from the code: 2,000,000 ticks, one vector per tick,
-several reallocations per vector as it grows to 257. Either way, **attribute the time to
-the allocator and the re-sum before you change a line.**
-
-## A3. Fix it in a copy (10 min)
-
-```bash
-cp starters/hw14/tail.cpp starters/hw14/tail_fixed.cpp
-```
-
-In `tail_fixed.cpp`, replace `signal()` with a ring that is allocated **once** and a
-running sum:
-
-```cpp
-struct RollingMean {
-    std::vector<double> buf;          // sized ONCE, in the constructor
-    std::size_t cap, count = 0, head = 0;
-    double sum = 0.0;
-    explicit RollingMean(std::size_t n) : buf(n, 0.0), cap(n) {}
-    double push(double px) {
-        if (count == cap) sum -= buf[head];   // evict the oldest
-        else              ++count;
-        sum += px;                             // admit the newest
-        buf[head] = px;
-        head = (head + 1 == cap) ? 0 : head + 1;
-        return sum / static_cast<double>(count);
+        switch (tag) {
+            case 11: out.clordid = v; out.clordid_len = vlen; id = true; break;
+            case 55: {
+                int n = vlen < 15 ? vlen : 15;
+                std::memcpy(out.symbol, v, n);
+                out.symbol[n] = '\0';
+                sym = true;
+                break;
+            }
+            case 54: if (vlen >= 1) { out.side = v[0]; side = true; } break;
+            case 38: {
+                uint32_t q = 0;
+                for (int i = 0; i < vlen; ++i) {
+                    if (v[i] < '0' || v[i] > '9') return false;
+                    q = q * 10 + static_cast<uint32_t>(v[i] - '0');
+                }
+                out.qty = q; qty = true;
+                break;
+            }
+            case 44: out.price = std::strtod(v, nullptr); px = true; break;  // stops at SOH
+            default: break;                            // 8, 9, 35, 10, ...: skip
+        }
     }
-};
+    return id && sym && side && qty && px;             // every required field seen
+}
 ```
 
-In `main`, build it **before** the timed loop and call it inside:
+```bash
+make fix
+# RESULT|fix_parse|pass|symbol/side/qty/price/clordid parsed
+# METRIC|fix_parse_ns_per_op|<n>
+```
+
+Measured on an Apple M4 (Apple clang, `-O2`): **~45 ns/op**. If you see hundreds,
+something allocates or copies. Two things to be able to say out loud: why `clordid`
+is a view (copying it is an allocation-shaped cost for bytes you may never read), and
+why `strtod` is safe here (it stops at the first non-numeric byte — the SOH — and does
+not allocate).
+
+## 2. `u64toa` — HW 7, part 2 (10 min)
+
+`int u64toa(uint64_t v, char* out)` writes the digits and returns the count. Start
+with the classic reverse-then-flip:
 
 ```cpp
-RollingMean roll(WINDOW + 1);                 // 257: matches the inclusive window
-// ... inside the timed loop, replacing the signal() call:
-sink += roll.push(prices[i]);
+#pragma once
+#include <cstdint>
+
+inline int u64toa(std::uint64_t v, char* out) {
+    char tmp[20];                      // UINT64_MAX = 18446744073709551615: 20 digits
+    int n = 0;
+    do {
+        tmp[n++] = static_cast<char>('0' + v % 10);
+        v /= 10;
+    } while (v);                       // do/while: v == 0 still prints "0"
+    for (int i = 0; i < n; ++i)        // flip into the caller's buffer, MSD first
+        out[i] = tmp[n - 1 - i];
+    return n;
+}
 ```
 
 ```bash
-g++ -O2 -std=c++17 starters/hw14/tail_fixed.cpp -o /tmp/tail_fixed
-for i in 1 2 3; do /tmp/tail_fixed; done
+make u64toa
+# RESULT|u64toa_edges|pass|...   RESULT|u64toa_fuzz|pass|...
+# METRIC|u64toa_ns_per_op|<n>    METRIC|std_to_string_ns_per_op|<m>
 ```
 
-Measured on the same M4:
+**Read the two numbers honestly.** On an Apple M4 with libc++ this simple version
+measured **9–12 ns/op against ~7.5 ns for `std::to_string`** — it *loses*. Modern
+`std::to_string` uses the small-string buffer (no heap for 15 digits) and a fast
+`to_chars`. Correct is green; *beating the library* is the HW 7 point, and it needs
+step 5's two-digit table (measured 5–6 ns/op on the same machine). On Linux/libstdc++
+your ratio will differ — report yours.
 
-```
-p50=0ns  p99=42ns  p99.9=42ns  max=9250ns  (sink=200998581.510)
-```
+> The benchmark hides `x` from the optimizer (`opaque(x)`) on purpose. If a
+> hand-rolled benchmark of yours ever prints ~0.25 ns/op, the compiler computed the
+> answer at compile time and you timed an empty loop.
 
-- **`sink` is identical** to the last printed digit. If yours differs, you changed the
-  math. The usual cause is `RollingMean roll(WINDOW)` (256 prices, not 257).
-- **`0ns` and `42ns` are clock ticks, not measurements**: macOS `steady_clock` advances
-  in ~42 ns steps here, so the whole tick now fits under one step. On Linux you'll see
-  real single-digit to tens of ns.
-- **`max` is still microseconds** even though every tick now does identical O(1) work.
-  That's the OS (preemption, interrupts), not your code — the deck's jitter slide.
-  Report it; don't "fix" it with flags.
+## 3. Frame a FIX stream over a non-blocking socket (10 min)
 
-The before/after table for Phase 6: p50, p99, p99.9 and max for both, three runs each,
-the same `sink`, and one line naming the cause.
-
-## A4. Sanitizers on the fixed copy (3 min)
-
-A hand-written ring is exactly where an off-by-one hides:
+A TCP socket delivers **bytes, not messages**. `starters/session07/frame_demo.cpp`
+pushes four NewOrderSingles through an `AF_UNIX` stream socketpair in awkward chunks —
+1 byte, 7 bytes, half a message, two at once. The reader is the deck's shape: the fd
+is `O_NONBLOCK`, `poll()` says "readable", `on_readable()` drains until `EAGAIN` into
+**one reusable buffer**, cuts frames from **BodyLength** (`8=FIX.4.2|9=NN|` + NN bytes +
+`10=XXX|`), verifies the **CheckSum**, and hands complete frames to **your** parser.
 
 ```bash
-g++ -O1 -g -fsanitize=address,undefined -std=c++17 starters/hw14/tail_fixed.cpp -o /tmp/tail_asan
-/tmp/tail_asan; echo "exit=$?"
+g++ -std=c++20 -O2 -Iinclude starters/session07/frame_demo.cpp -o /tmp/frame && /tmp/frame
 ```
 
-Clean means the normal output line and `exit=0` (slower, that's expected). Break it on
-purpose — `head = head + 1;` without the wrap — and read the `heap-buffer-overflow`
-report once. For your threaded pipeline, TSan is a **separate** build:
-`-fsanitize=thread`. Never ship a sanitizer build.
+Expected tail (identical on macOS and Linux):
 
-## A5. PGO and LTO on the frozen kernel (2 min, if time)
+```
+  frame 1: 65 bytes, ORD1 BUY  100 @ 185.50
+  frame 2: 64 bytes, ORD2 SELL 25 @ 182.25
+wrote  115 bytes (256/256)
+  frame 3: 64 bytes, CHECKSUM MISMATCH -> dropped
+  frame 4: 63 bytes, ORD4 SELL 5 @ 251.10
+frames=4 parsed=3 bad_checksum=1 recv_calls=6 partial_waits=5 leftover=0
+```
 
-`starters/hw13/kernel.cpp` is still **do-not-modify**. Two builds for GCC:
+Frame 3 was tampered with (`38=10` → `38=90`) *after* its checksum was computed.
+`partial_waits=5` is the number of times the reader had half a message and correctly
+**waited** instead of parsing garbage. If you still see `parse FAILED`, step 1 isn't done.
+
+Read `frame_at()` and `on_readable()` and answer in one line each: (a) why the reader
+never calls `recv` once per message, (b) what `memmove` keeps, (c) why `kMaxBody` exists.
+
+## 4. The machine: `-O0` vs `-O3 -march=native` (8 min)
+
+`starters/hw13/kernel.cpp` is a float reduction with a data-dependent branch over a
+64K array, 3,000 times. **Do not edit it** — the command line is your only lever.
 
 ```bash
-g++ -O3 -march=native -fprofile-generate starters/hw13/kernel.cpp -o /tmp/gen && /tmp/gen
-g++ -O3 -march=native -fprofile-use      starters/hw13/kernel.cpp -o /tmp/pgo && /tmp/pgo
+g++ -O0 starters/hw13/kernel.cpp -o /tmp/slow && /tmp/slow
+g++ -O3 -march=native starters/hw13/kernel.cpp -o /tmp/fast && /tmp/fast
 ```
 
-For clang / Apple clang the profile goes through `llvm-profdata`:
+Same `checksum=`, far smaller `time_ms`. Measured on an Apple M4: **934 ms → 148 ms
+(6.3×)** — and `-O2` alone gives the same 149 ms. Now ask the compiler *why*:
 
 ```bash
-clang++ -O3 -march=native -fprofile-instr-generate starters/hw13/kernel.cpp -o /tmp/gen
-LLVM_PROFILE_FILE=/tmp/k.profraw /tmp/gen
-xcrun llvm-profdata merge -o /tmp/k.profdata /tmp/k.profraw     # Linux: llvm-profdata
-clang++ -O3 -march=native -fprofile-instr-use=/tmp/k.profdata starters/hw13/kernel.cpp -o /tmp/pgo && /tmp/pgo
-g++ -O3 -march=native -flto starters/hw13/kernel.cpp -o /tmp/lto && /tmp/lto
+# clang / Apple clang:
+g++ -O3 -march=native -Rpass=loop-vectorize -Rpass-missed=loop-vectorize \
+    -c starters/hw13/kernel.cpp -o /dev/null
+# GCC:
+g++ -O3 -march=native -fopt-info-vec-all -c starters/hw13/kernel.cpp -o /dev/null
 ```
 
-M4: `-O3` 149 ms → PGO 137 ms → LTO 139 ms, **same checksum** each time. One file, so
-LTO has little to work with; on your bot (many `.cpp` files) it has more. For the bot,
-one CMake build directory per flag set, `--fresh` (CMake ≥ 3.24), or the cache ignores
-your `-DCMAKE_CXX_FLAGS`.
-
-## B. HW 8 — the cross-venue stale-quote detector (take-home)
-
-`starters/session08/stale_quote.cpp` is the harness: the contract in the header
-comment, a `detect_stale()` stub, and a ten-row test table.
+On clang (arm64 *and* x86-64 AVX2) the hot loop reports **`loop not vectorized`**. The
+6× is inlining, registers and scheduling — not SIMD. The reason is the accumulator:
+`acc += ...` in order is a floating-point sum, and **FP addition is not associative**,
+so splitting it across 8 lanes would change the answer. Prove it:
 
 ```bash
-g++ -std=c++20 -O2 starters/session08/stale_quote.cpp -o /tmp/stale && /tmp/stale
-# ... 4/10 cases pass    <- the stub never fires, so only the "no order" rows pass
+g++ -O3 -march=native -ffast-math starters/hw13/kernel.cpp -o /tmp/ffm && /tmp/ffm
 ```
 
-The contract, in one breath: a cross exists when one venue's bid is above the other's
-ask; the **older** of the two crossing quotes is the stale one; buy the stale ask or sell
-the stale bid **on the stale venue**; fire only if the cross survives **two taker
-fees** (`price × fee_bps × 1e-4` per leg); size is the stale quote's displayed size,
-**clipped so |position| never exceeds the limit**. No allocation — this runs inside
-`on_book`.
+M4: **87 ms, and the checksum moves** (151299320.088155 → 151299381.089299). The
+compiler vectorized as soon as you gave it permission to reassociate. One line in your
+notes: would you ship `-ffast-math` in a pricing kernel? (A faster build that prints a
+different checksum changed the math; it does not count.)
 
-Two rows are the deck's arithmetic: the 1-cent cross at 30 bps **must not fire**
-(net −0.59 a share); the $0.96 cross at 30 bps must. When all ten pass, write
-`README.md` with the part that carries the marks:
+## 5. Take-home
 
-1. **What latency would you need for this to be real?** Compare how long a stale quote
-   survives with your measured tick-to-trade (Part A, Phase 6).
-2. **What makes the signal false?** Adverse selection: the "stale" venue may be right and
-   the fresh one about to reverse; the stale quote may be a trap sized to be hit; your
-   timestamps may be the stale ones.
-3. **Stretch:** a resting order on the stale venue when the other venue moves — hold or
-   reprice? Use the queue-aware rule from the deck.
-
-HW 8 is hand-graded: source plus README. Add your own cases to the table.
-
-## C. Tournament pre-flight (before Part 3)
-
-From a **fresh clone** of your repo, not your working copy:
-
-```bash
-make client                    # hft/cpp_client -> hft/cpp_client/build/hft_bot (TLS on)
-make run                       # connects with TEAM_ID / ARENA_TOKEN from .env
-```
-
-Then confirm, in order:
-
-- [ ] Your team appears on the dashboard's LATENCY tab once the round opens.
-- [ ] Your bot counts its own messages per tick and stays under **6** (the finale
-      scenario's `order_quota`); rejects in your log mean you're over.
-- [ ] Any arb threshold includes the **30 bps** taker fee on *both* legs.
-- [ ] Nothing in `on_book` allocates, logs or blocks (Part A, applied to the bot).
-- [ ] Your cross-venue plan, if any, is **two processes** with one `EXCHANGE_URL` each
-      and a shared touch cache (your Phase 4 ring). `EXCHANGE_URLS` is Python-only.
-- [ ] Offline fallback works: if you can't connect, the replay gives a legitimate
-      Phase 7 number:
-      ```bash
-      python3 scripts/latency_replay.py --latest --cmd "hft/cpp_client/build/hft_bot --replay"
-      ```
-
-The finale scenario is `hft/scenarios/week10.json` in the arena repo: `order_quota` 6,
-`position_limit` 1200, `SHORT_LOCATE_CAP` 600, opening auction 15 ticks, closing 12,
-`LULD_BAND_PCT` 0.08, AAPL earnings at tick 250, the FPGA ("Gateway Silicon") IPO
-listing at 550, a market-wide econ print at 850, NVDA earnings at 1150. The shop is
-closed (`purchase_window: false`): nobody buys colocation.
+1. **Beat `std::to_string` (HW 7).** Halve the divisions with a two-digit table:
+   ```cpp
+   static constexpr char D2[201] =
+       "00010203040506070809101112131415161718192021222324"
+       "25262728293031323334353637383940414243444546474849"
+       "50515253545556575859606162636465666768697071727374"
+       "75767778798081828384858687888990919293949596979899";
+   // while (v >= 100): r = v % 100, v /= 100, copy D2[2*r], D2[2*r+1] (fill from the right)
+   // then the last one or two digits; copy the result into out; return the length.
+   ```
+   Re-run `make u64toa` three times and report the median of each metric.
+2. **AVX2 by hand, once.** The deck's `weighted_sum` intrinsic loop, in
+   `scratch/simd_demo.cpp` with a `main` that sums 128 ones against weights `0..127`
+   (expect `8128.0`). x86-64: `g++ -std=c++20 -O2 -mavx2 -mfma scratch/simd_demo.cpp -o /tmp/simd`.
+   Apple Silicon has no AVX: `clang++ -std=c++20 -O2 -arch x86_64 -mavx2 -mfma ...`
+   builds an x86 binary that runs under Rosetta — correct output, meaningless timings.
+3. **Your bot (Project Phase 5).** Replace `on_book`'s path to best bid/ask with the
+   deck's targeted extract (`"bids":[[`, `"asks":[[`, `"mid_price":` — levels are
+   `[price, qty]`, index 0 is the touch), stamp outbound quantities with your `u64toa`,
+   and measure before/after on **the same tape**:
+   ```bash
+   make client        # or: cmake -S hft/cpp_client -B hft/cpp_client/build && cmake --build hft/cpp_client/build
+   python3 scripts/latency_replay.py --latest --cmd "hft/cpp_client/build/hft_bot --replay"
+   ```
+   (`--latest` takes the newest `sessions/session_*.jsonl`; or pass a tape path
+   positionally.) The reference client measured p50 33.4 µs / p99.9 72.9 µs on an M4
+   over 4,057 snapshots — your baseline is whatever *your* machine prints first.
+4. **Linux only:** pin the bot's hot thread (`pthread_setaffinity_np` or `taskset -c 3`)
+   and re-run the replay three times. Report the p99.9 spread with and without. macOS has
+   no CPU-affinity API: skip the pin, keep the measurement, say so in the Phase 5 write-up.
 
 ## Checkpoint
 
-- [ ] Before/after table: `tail` vs `tail_fixed`, three runs each, **same `sink`**
-- [ ] A profile (perf, a flame graph, or Instruments) that points at the allocator
-- [ ] `tail_fixed` clean under `-fsanitize=address,undefined`
-- [ ] You can explain why `max` stayed in microseconds after the fix
-- [ ] `/tmp/stale` passes 10/10 (by Dec 3) and the README answers both questions
-- [ ] Fresh-clone build connects, or the replay runs
+- [ ] `make fix` → `RESULT|fix_parse|pass`, and you know your ns/op
+- [ ] `make u64toa` → edges and fuzz `pass`; `u64toa_ns_per_op` below `std_to_string_ns_per_op`
+      (after the take-home table if needed)
+- [ ] `clordid` is a view into the caller's buffer; malformed input returns `false`
+- [ ] `/tmp/frame` ends `frames=4 parsed=3 bad_checksum=1 ... leftover=0`
+- [ ] You can explain why `kernel.cpp` did **not** vectorize at `-O3` and what
+      `-ffast-math` changed
+- [ ] `make test` scores the rows *FIX: parse NewOrder*, *u64toa: edge cases*,
+      *u64toa: fuzz vs std*
 
 ## Files
 
-- Profile and fix: `starters/hw14/tail.cpp` → your `starters/hw14/tail_fixed.cpp`
-- Frozen kernel (flags only): `starters/hw13/kernel.cpp`
-- HW 8 harness: `starters/session08/stale_quote.cpp`
-- Client, `make client` / `make run`, replay: `docs/HFT_CPP_CLIENT.md`, `scripts/latency_replay.py`
-- Phase 6 and 7 checklist: `project/README.md`
+- Edit: `include/fix_parser.hpp`, `include/u64toa.hpp` (HW 7)
+- Contracts (read-only): `tests/fix_test.cpp`, `tests/u64toa_test.cpp`, `tests/bench.hpp`
+- Demo: `starters/session07/frame_demo.cpp` · frozen kernel: `starters/hw13/kernel.cpp`
+- Grader: `make test` (`tests/run_ci.py`) · client + replay: `docs/HFT_CPP_CLIENT.md`
+- The arena wire (JSON over WebSocket, not FIX): `shared/messages.py` in the arena repo

@@ -1,4 +1,4 @@
-// frame_demo.cpp — Session 7 lab, step 3: frame a FIX byte STREAM.
+// frame_demo.cpp — Session 8 lab (labs/session08.md), step 3: frame a FIX byte STREAM.
 //
 // A TCP socket hands you bytes, not messages. This demo pushes four FIX
 // NewOrderSingle messages through a non-blocking AF_UNIX stream socketpair in

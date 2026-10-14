@@ -1,4 +1,4 @@
-// bench_book.cpp — Session 5 lab: YOUR flat Book / SymMap (include/order_book.hpp)
+// bench_book.cpp — Session 6 lab (labs/session06.md), Part C: YOUR flat Book / SymMap (include/order_book.hpp)
 // vs the std:: containers you would reach for first.
 // Build:  make bench-book
 #include <cstdint>

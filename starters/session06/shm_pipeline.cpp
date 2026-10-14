@@ -1,4 +1,4 @@
-// shm_pipeline.cpp — Session 6 lab, step 9 / Project Phase 4 starting point.
+// shm_pipeline.cpp — Session 7 lab (labs/session07.md), D3 / Project Phase 4 starting point.
 // Two SEPARATE processes share YOUR ShmRing (include/shm_ring.hpp) through a
 // named POSIX shared-memory object. Run the strategy first, then the feed:
 //   g++ -std=c++17 -O2 -Iinclude starters/session06/shm_pipeline.cpp -o /tmp/shm_pipe

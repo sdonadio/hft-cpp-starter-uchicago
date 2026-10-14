@@ -1,4 +1,4 @@
-// race.cpp — Session 6 lab, step 1. Two threads, one plain counter: a data race.
+// race.cpp — Session 7 lab (labs/session07.md), A1–A4. Two threads, one plain counter: a data race.
 //   g++ -std=c++17 -O0 -pthread starters/session06/race.cpp -o /tmp/race      (see lost updates)
 //   g++ -std=c++17 -O2 -pthread starters/session06/race.cpp -o /tmp/race_o2   (may LOOK right)
 //   g++ -std=c++17 -O1 -g -pthread -fsanitize=thread starters/session06/race.cpp -o /tmp/race_tsan

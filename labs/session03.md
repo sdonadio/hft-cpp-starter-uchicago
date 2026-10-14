@@ -444,7 +444,7 @@ clang++ -std=c++20 -O2 -pthread -Itests scratch/s3/s4_contended.cpp -o /tmp/s4_c
 
 Same instruction, twenty times slower: every core is fighting for the one cache
 line that holds the reference count. You will meet this line-bouncing again in
-Session 6.
+Session 7.
 
 **6c. A cycle, and the fix.** `scratch/s3/s4_cycle.cpp`:
 

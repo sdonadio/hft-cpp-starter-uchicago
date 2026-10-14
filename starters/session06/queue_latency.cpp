@@ -1,4 +1,4 @@
-// queue_latency.cpp — Session 6 lab, step 7. One-way latency through a queue:
+// queue_latency.cpp — Session 7 lab (labs/session07.md), E1. One-way latency through a queue:
 // the producer stamps each item and pushes it at a steady rate; the consumer
 // pops it and records (now - stamp). Two queues: std::mutex + std::deque, and
 // YOUR lock-free SPSCRing (include/spsc_ring.hpp).

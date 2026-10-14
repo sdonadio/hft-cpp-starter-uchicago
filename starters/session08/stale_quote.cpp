@@ -1,4 +1,4 @@
-// stale_quote.cpp — HW 8 "Cross-venue stale-quote detector" (Session 8).
+// stale_quote.cpp — HW 8 "Cross-venue stale-quote detector" (Session 9 lab, labs/session09.md, Part B).
 //
 // Two venues quote the same symbol. When their tops of book CROSS (one venue's
 // bid above the other's ask), one of the two quotes is stale: the one that was
