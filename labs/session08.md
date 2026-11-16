@@ -291,3 +291,7 @@ different checksum changed the math; it does not count.)
 - Demo: `starters/session07/frame_demo.cpp` · frozen kernel: `starters/hw13/kernel.cpp`
 - Grader: `make test` (`tests/run_ci.py`) · client + replay: `docs/HFT_CPP_CLIENT.md`
 - The arena wire (JSON over WebSocket, not FIX): `shared/messages.py` in the arena repo
+
+## Part 0 warm-up
+
+Part 0 warm-up: `labs/session08_sockets/` (a moving average over TCP, then over UDP multicast with gap detection; see its README).
